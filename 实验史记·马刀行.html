@@ -9259,9 +9259,10 @@ window.SJI_UI = (function () {
       '<div class="result-stats">回合：' + b.round + "　·　击破：" + b.stats.kills + "　·　用技：" + (b.stats.usedSkill ? "有" : "无") + "　·　血祭：" + (b.stats.usedBlood ? "有" : "无") + "</div>" +
       (extraHtml || "") +
       '<div class="btnrow" style="justify-content:center;margin-top:18px">' +
-      '<button class="btn" id="r-retry">重整旗鼓</button>' +
+      (win ? "" : '<button class="btn" id="r-retry">重整旗鼓</button>') +
       '<button class="btn primary" id="r-menu">回校园</button></div>';
-    $("#r-retry").onclick = () => {
+    const retryBtn = $("#r-retry");
+    if (retryBtn) retryBtn.onclick = () => {
       AU.click();
       const cfg = Object.assign({}, b.cfg);
       delete cfg.introScene;
