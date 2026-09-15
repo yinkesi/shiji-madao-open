@@ -38,7 +38,9 @@ window.SJI_CONFIG = (function () {
     easy:    { apSolo: 2, apBig: 1, dmgMul: 0.70, hpExtra: 1.00, killHeal: 2, forceFrenzy: false },
     normal:  { apSolo: 3, apBig: 2, dmgMul: 1.00, hpExtra: 1.00, killHeal: 2, forceFrenzy: false },
     hard:    { apSolo: 4, apBig: 2, dmgMul: 1.15, hpExtra: 1.00, killHeal: 2, forceFrenzy: false },
-    extreme: { apSolo: 5, apBig: 3, dmgMul: 1.35, hpExtra: 1.25, killHeal: 0, forceFrenzy: true }
+    extreme: { apSolo: 5, apBig: 3, dmgMul: 1.35, hpExtra: 1.25, killHeal: 0, forceFrenzy: true },
+    /* 噩梦：敌方全员最优行动（aiActNightmare 枚举走位×行动取最优），且资源碾压 */
+    nightmare: { apSolo: 6, apBig: 4, dmgMul: 1.5, hpExtra: 1.4, killHeal: 0, forceFrenzy: false, optimal: true }
   };
 
   /* 敌方按人数的基础伤害缩放（以少打多为常态，人多则单体递减） */
@@ -46,7 +48,7 @@ window.SJI_CONFIG = (function () {
   /* 剧情/生存敌方血量按人数缩放（乱斗模式另有难度倍率） */
   const HP_BY_COUNT = { 1: 1.00, 2: 0.85, 3: 0.70, 4: 0.62 };
   const SURVIVAL_HP_EXTRA = 0.90;           // 生存模式敌方血量额外系数
-  const FREE_HP_MULT = { easy: 0.8, normal: 1, hard: 1.2, extreme: 1.35 };  // 乱斗血量倍率
+  const FREE_HP_MULT = { easy: 0.8, normal: 1, hard: 1.2, extreme: 1.35, nightmare: 1.5 };  // 乱斗血量倍率
 
   /* ---------- AI 进攻性档位 ----------
    * skill   : 技能使用意愿（会叠加角色 aggr 微调）

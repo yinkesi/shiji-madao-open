@@ -9,6 +9,7 @@ const DIFFS = [
   { v: 'normal',  n: '普通', mul: 1.0, tip: '标准强度（默认）' },
   { v: 'hard',    n: '困难', mul: 1.3, tip: '敌方更狠；赏格 ×1.3' },
   { v: 'extreme', n: '极难', mul: 1.6, tip: '敌方 5 动、强制狂攻、击破不回血；赏格 ×1.6' },
+  { v: 'nightmare', n: '噩梦', mul: 2.2, tip: '敌方全员最优行动（枚举走位与行动取最优解）+ 资源碾压；赏格 ×2.2' },
 ];
 const DIFF_BY_V = {};
 DIFFS.forEach(d => DIFF_BY_V[d.v] = d);
@@ -679,6 +680,23 @@ const Quests = (() => {
       Save.write();
       this.render();
       return '<div class="result-extra">' + lines.join('') + '</div>';
+    },
+    /* 老档迁移：已完成的支线若奖励含身怀之技，一次性静默补发（否则老玩家永远拿不到） */
+    migrateInnates() {
+      let got = [];
+      for (const q of this.sideList()) {
+        if (G.quests[q.id] && q.reward && q.reward.innate && !Blades.innates().includes(q.reward.innate)) {
+          Blades.innates().push(q.reward.innate);
+          const info = Blades.INNATE_INFO[q.reward.innate];
+          got.push(info ? '「' + info.name + '」' : q.reward.innate);
+        }
+      }
+      if (got.length) {
+        Save.write();
+        if (Blades.hasCard && window.SJI_DATA) Blades.registerChar();
+        toast('身怀之技补发（按已完成的支线）：' + got.join(''), '承');
+      }
+      return got.length;
     },
     /* 出战名册 */
     roster() { if (!G.roster) G.roster = ['yinkesi']; return G.roster; },

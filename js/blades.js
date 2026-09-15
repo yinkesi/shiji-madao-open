@@ -198,10 +198,11 @@ const Blades = (() => {
     const up = upgrades();
     const upDesc = Object.keys(UPGRADE_BOON)
       .filter(k => up[k]).map(k => UPGRADES.find(u => u.id === k).name).join('、');
+    const innateHp = innates().reduce((a, id) => a + ((INNATE_INFO[id] && INNATE_INFO[id].hp) || 0), 0);
     window.SJI_DATA.CHARACTERS.yinkesi = {
       id: 'yinkesi', name: '音克思', hao: '史官 · ' + rankName(), juan: '各卷',
       glyph: '史', color: '#a63a2b',
-      hp: 10 + hpBonus(),
+      hp: 10 + hpBonus() + innateHp,
       passive: {
         name: eqId ? '刀谱 · ' + rankName() : '白板 · ' + rankName(),
         desc: `胜${wins()}场：血上限+${hpBonus()}，每回合行动点+${apBonus()}。`
@@ -226,12 +227,6 @@ const Blades = (() => {
       battle.player._learnedFrom = equippedSkillId() || null;
       /* 身怀之技（支线永久继承的被动）：注入多来源集合 */
       battle.player._innates = innates().slice();
-      const innateHp = innates().reduce((a, id) => a + ((INNATE_INFO[id] && INNATE_INFO[id].hp) || 0), 0);
-      if (innateHp > 0) {
-        battle.player.maxhp += innateHp;
-        battle.player.hp += innateHp;
-        battle.pushLog("身怀「大腹如斗」：血上限 +" + innateHp + "。");
-      }
       if (innates().length) battle.pushLog("身怀之技：" + innates().map(id => INNATE_INFO[id] ? INNATE_INFO[id].name : '').filter(Boolean).join('、') + "。");
       const n = apBonus();
       for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));

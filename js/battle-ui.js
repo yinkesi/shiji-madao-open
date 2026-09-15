@@ -184,9 +184,9 @@ window.SJI_UI = (function () {
     $("#round-no").textContent = "第 " + battle.round + " 回合" + (battle.mode === "survival" ? " · 第" + battle.survivalWaveNo + "波" : "");
     if ($("#ai-label")) {
       const nm = CFG.AI_LABEL || {};
-      const dn = { easy: "简单", normal: "普通", hard: "困难", extreme: "极难" };
+      const dn = { easy: "简单", normal: "普通", hard: "困难", extreme: "极难", nightmare: "噩梦" };
       const diffTxt = dn[battle.diff] || "普通";
-      const aiTxt = (battle.diff === "extreme") ? "狂攻(强制)" : (nm[battle.aiAggr] || "主动");
+      const aiTxt = (battle.diff === "nightmare") ? "最优(强制)" : ((battle.diff === "extreme") ? "狂攻(强制)" : (nm[battle.aiAggr] || "主动"));
       $("#ai-label").textContent = diffTxt + " · AI " + aiTxt;
     }
   }

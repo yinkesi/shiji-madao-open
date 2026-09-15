@@ -67,7 +67,7 @@ const diffPanel = await page.evaluate(() => ({
   title: document.querySelector('#panel-title').textContent,
   n: document.querySelectorAll('#panel-body .card').length,
 }));
-check('开卷前弹出难度选择（四档）', /难度/.test(diffPanel.title) && diffPanel.n === 4, diffPanel.title + ' / ' + diffPanel.n + ' 档');
+check('开卷前弹出难度选择（五档）', /难度/.test(diffPanel.title) && diffPanel.n === 5, diffPanel.title + ' / ' + diffPanel.n + ' 档');
 // 选「困难」：赏格 ×1.3，供下一节核对任务赏格
 await page.evaluate(() => {
   const c = [...document.querySelectorAll('#panel-body .card')].find(x => x.textContent.includes('困难'));

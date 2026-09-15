@@ -71,7 +71,7 @@ function randRps() {
   };
 }
 
-const DIFFS = ['easy', 'normal', 'hard', 'extreme'];
+const DIFFS = ['easy', 'normal', 'hard', 'extreme', 'nightmare'];
 const rows = [];
 
 for (const q of MAIN) {

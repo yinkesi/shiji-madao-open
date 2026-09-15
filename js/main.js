@@ -22,6 +22,8 @@ const Main = (() => {
     /* 章节达标即解锁世界内容（协会/试炼/生存），老档与新档一视同仁 */
     Engine.syncChapter();
     Engine.syncWorldFlags();
+    /* 老档补发：已完成支线对应的身怀之技（一次性静默补齐，toast 汇总） */
+    if (window.Quests && Quests.migrateInnates) Quests.migrateInnates();
   }
 
   /* ---------- 任务：接战 / 完成回流 ---------- */
@@ -356,10 +358,13 @@ const Main = (() => {
         const ch = window.SJI_DATA.CHARACTERS[id];
         if (!ch) return;
         const sk = Blades.skillCardOf(id);
+        /* 支线获得的身怀被动：追加写在对应角色的卡面上 */
+        const innate = Blades.innates().includes(id) ? Blades.INNATE_INFO[id] : null;
         const c = el('div', 'card');
         c.style.cssText = 'display:flex;align-items:center;gap:12px';
-        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${ch.name} <span class="phao" style="color:var(--cinnabar);font-size:12px">${ch.hao}</span></h3>
-          <div class="meta">${sk ? `「${sk.name}」：${sk.desc}` : '（其技不可录，徒留其名）'}</div></div>`;
+        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${ch.name} <span class="phao" style="color:var(--cinnabar);font-size:12px">${ch.hao}</span>${innate ? '<span class="pill jade" style="margin-left:5px">身怀</span>' : ''}</h3>
+          <div class="meta">${sk ? `「${sk.name}」：${sk.desc}` : '（其技不可录，徒留其名）'}</div>
+          ${innate ? `<div class="meta" style="color:var(--jade)">身怀被动「${innate.name}」：${innate.desc}（支线所授，常驻生效）</div>` : ''}</div>`;
         const b = el('button', 'btn' + (eqId === id ? ' btn-primary' : ''), eqId === id ? '出战中' : (sk ? '换此技' : '不可选'));
         b.style.padding = '8px 14px';
         if (!sk || eqId === id) b.disabled = true;

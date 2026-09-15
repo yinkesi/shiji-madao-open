@@ -786,6 +786,127 @@ window.SJI_ENGINE = (function () {
       return null;
     }
 
+    /* ---- 噩梦难度：最优行动 AI ----
+       每花 1 行动点前，枚举「可站立格 × 可执行行动」并打分：
+       分 = 期望输出（击杀重奖）+ 位置价值（城墙/远离威胁）− 落位威胁（玩家侧下一手最大反击）
+       取最高分执行。不做深搜索——马刀的深度在位置经济，一层贪心 + 威胁模型已是碾压级。 */
+    aiThreatAt(u, r, c) {
+      let threat = 0;
+      for (const f of this.opponentsOf(u)) {
+        if (!f.alive || f.offField > 0) continue;
+        const cheb = Math.max(Math.abs(f.r - r), Math.abs(f.c - c));
+        const manh = Math.abs(f.r - r) + Math.abs(f.c - c);
+        let dmg = 0;
+        if (f.hasKnife && cheb <= 1 + (this.hasPassive(f, "dazhan") ? 1 : 0)) {
+          let d = 1;
+          if (this.hasPassive(f, "luhao")) d *= 2;
+          if (this.hasPassive(f, "dage") && isWall(r, c)) d += 1;
+          if (this.hasPassive(f, "weirong")) d += 1;
+          if (f.st.bloodlust > 0) d *= 2;
+          dmg = Math.max(dmg, d);
+        }
+        if (f.hasHorse && isWall(r, c) && isWall(f.r, f.c) && manh <= 3 + (f.boons.horseRange || 0)) dmg = Math.max(dmg, 3);
+        const sk = this.skillOf(f, 0);
+        if (sk && sk.dmg && cheb <= (sk.range || 1) && (f.cds[0] || 0) <= 0 && !f.st.silence) dmg = Math.max(dmg, sk.dmg);
+        threat += dmg;
+      }
+      return threat;
+    }
+
+    aiEstKnife(att, def) {
+      let d = 1;
+      if (this.hasPassive(att, "luhao")) d *= 2;
+      if (this.hasPassive(att, "dage") && isWall(att.r, att.c)) d += 1;
+      if (this.hasPassive(att, "weirong")) d += 1;
+      if (att.boons.knife) d += att.boons.knife;
+      if (att.st.bloodlust > 0) d *= 2 * att.st.bloodlust;
+      if (att.charId === "wenbin" || this.hasPassive(att, "wenbin")) d = Math.round(d * 1.3);
+      return Math.max(1, d);
+    }
+
+    async aiActNightmare(u) {
+      let guard = 0;
+      while (u.apNow > 0 && u.alive && !this.over && guard++ < 10) {
+        const foes = this.opponentsOf(u);
+        if (!foes.length) break;
+        // 枚举可站立格（含原地）
+        const cells = [{ r: u.r, c: u.c }];
+        const reach = this._reachable(u, this.moveRange(u));
+        for (const key of reach.keys) {
+          const [r, c] = key.split(",").map(Number);
+          if (!this.unitAt(r, c) && !(r === u.r && c === u.c)) cells.push({ r, c });
+        }
+        let best = null;
+        for (const cell of cells) {
+          const stand = -this.aiThreatAt(u, cell.r, cell.c) + (isWall(cell.r, cell.c) ? 0.5 : 0);
+          // 该格可执行的行动
+          const acts = [];
+          if (!u.hasKnife) acts.push({ kind: "buyknife", score: 6 });
+          for (const f of foes) {
+            const adj2 = Math.max(Math.abs(cell.r - f.r), Math.abs(cell.c - f.c)) <= 1;
+            if (u.hasKnife && adj2 && !isWall(cell.r, cell.c) && !isWall(f.r, f.c) || (u.hasKnife && adj2)) {
+              const d = this.aiEstKnife(u, f);
+              acts.push({ kind: "knife", t: f, score: d * 3 + (f.hp <= d ? 14 : (f.hp - d <= 3 ? 4 : 0)) });
+            }
+            if (u.hasHorse && isWall(cell.r, cell.c) && isWall(f.r, f.c) && Math.abs(cell.r - f.r) + Math.abs(cell.c - f.c) <= 3) {
+              acts.push({ kind: "horse", t: f, score: 3 * 3 + (f.hp <= 3 ? 14 : 0) });
+            }
+            if (u.hasHorse && !isWall(cell.r, cell.c) && !isWall(f.r, f.c) && adj2) {
+              acts.push({ kind: "drive", t: f, score: 3 });
+            }
+          }
+          // 技能
+          const ch = u.ch;
+          const idxs = ch.skills ? [0, 1] : [0];
+          for (const i of idxs) {
+            const sk = this.skillOf(u, i);
+            if (!sk || !this.skillReady(u, i) || u.apNow < (sk.ap || 1) || u.st.silence > 0) continue;
+            const rng = sk.kind === "adj" ? 1 : (sk.kind === "raoe" ? (sk.range || 2) : (sk.range || 1));
+            if (sk.kind === "self") {
+              if (sk.heal && u.hp <= u.maxhp - 2) acts.push({ kind: "skill", idx: i, t: null, score: sk.heal * 2 });
+              continue;
+            }
+            let bestT = null, bestV = -1;
+            for (const f of foes) {
+              const cheb = Math.max(Math.abs(cell.r - f.r), Math.abs(cell.c - f.c));
+              if (cheb > rng) continue;
+              const v = (sk.dmg || 1) * 2.5 + (f.hp <= (sk.dmg || 1) ? 12 : 0);
+              if (v > bestV) { bestV = v; bestT = f; }
+            }
+            if (bestT) acts.push({ kind: "skill", idx: i, t: bestT, score: bestV });
+          }
+          // 血祭：贴身且血量健康时才划算
+          if (u.hasKnife && u.hp >= 6 && foes.some(f => Math.max(Math.abs(cell.r - f.r), Math.abs(cell.c - f.c)) <= 2)) {
+            acts.push({ kind: "sac", score: 4 });
+          }
+          const top = acts.sort((a, b) => b.score - a.score)[0];
+          if (!top) continue;
+          const total = stand + top.score;
+          if (!best || total > best.score) best = { score: total, cell, act: top };
+        }
+        if (!best || best.score <= -60) break;   // 全图皆死地：干脆不动（等死也好过送死）
+        // 执行
+        if (best.cell.r !== u.r || best.cell.c !== u.c) await this.doMove(u, best.cell.r, best.cell.c);
+        const a = best.act;
+        if (a.kind === "buyknife") await this.doBuyKnife(u);
+        else if (a.kind === "knife") await this.doKnife(u, a.t);
+        else if (a.kind === "horse") await this.doHorse(u, a.t);
+        else if (a.kind === "drive") await this.doDrive(u, a.t);
+        else if (a.kind === "sac") await this.doSacrifice(u);
+        else if (a.kind === "skill") await this.doSkill(u, a.idx, a.t);
+        await sleep(200);
+      }
+      // 剩余行动点：向最近的敌人逼近（不浪费节奏）
+      if (u.apNow > 0 && u.alive && !this.over) {
+        const foes = this.opponentsOf(u);
+        if (foes.length) {
+          const t = foes.sort((a, b) => manh(u, a) - manh(u, b))[0];
+          const step = this._stepToward(u, t);
+          if (step && !(step[0] === u.r && step[1] === u.c)) await this.doMove(u, step[0], step[1]);
+        }
+      }
+    }
+
     async aiAct(u) {
       // 回合开始状态结算
       if (u.offField > 0) {
@@ -802,6 +923,11 @@ window.SJI_ENGINE = (function () {
       }
       window.SJI_UI.onState();
       await sleep(240);
+      if (this.diff === "nightmare") {
+        await this.aiActNightmare(u);
+        this._tickStatusEnd(u);
+        return;
+      }
       let guard = 0;
       const prof = (u.side === "ally")
         ? CFG.AI_ALLY

@@ -4295,7 +4295,9 @@ window.SJI_CONFIG = (function () {
     easy:    { apSolo: 2, apBig: 1, dmgMul: 0.70, hpExtra: 1.00, killHeal: 2, forceFrenzy: false },
     normal:  { apSolo: 3, apBig: 2, dmgMul: 1.00, hpExtra: 1.00, killHeal: 2, forceFrenzy: false },
     hard:    { apSolo: 4, apBig: 2, dmgMul: 1.15, hpExtra: 1.00, killHeal: 2, forceFrenzy: false },
-    extreme: { apSolo: 5, apBig: 3, dmgMul: 1.35, hpExtra: 1.25, killHeal: 0, forceFrenzy: true }
+    extreme: { apSolo: 5, apBig: 3, dmgMul: 1.35, hpExtra: 1.25, killHeal: 0, forceFrenzy: true },
+    /* 噩梦：敌方全员最优行动（aiActNightmare 枚举走位×行动取最优），且资源碾压 */
+    nightmare: { apSolo: 6, apBig: 4, dmgMul: 1.5, hpExtra: 1.4, killHeal: 0, forceFrenzy: false, optimal: true }
   };
 
   /* 敌方按人数的基础伤害缩放（以少打多为常态，人多则单体递减） */
@@ -4303,7 +4305,7 @@ window.SJI_CONFIG = (function () {
   /* 剧情/生存敌方血量按人数缩放（乱斗模式另有难度倍率） */
   const HP_BY_COUNT = { 1: 1.00, 2: 0.85, 3: 0.70, 4: 0.62 };
   const SURVIVAL_HP_EXTRA = 0.90;           // 生存模式敌方血量额外系数
-  const FREE_HP_MULT = { easy: 0.8, normal: 1, hard: 1.2, extreme: 1.35 };  // 乱斗血量倍率
+  const FREE_HP_MULT = { easy: 0.8, normal: 1, hard: 1.2, extreme: 1.35, nightmare: 1.5 };  // 乱斗血量倍率
 
   /* ---------- AI 进攻性档位 ----------
    * skill   : 技能使用意愿（会叠加角色 aggr 微调）
@@ -5769,6 +5771,127 @@ window.SJI_ENGINE = (function () {
       return null;
     }
 
+    /* ---- 噩梦难度：最优行动 AI ----
+       每花 1 行动点前，枚举「可站立格 × 可执行行动」并打分：
+       分 = 期望输出（击杀重奖）+ 位置价值（城墙/远离威胁）− 落位威胁（玩家侧下一手最大反击）
+       取最高分执行。不做深搜索——马刀的深度在位置经济，一层贪心 + 威胁模型已是碾压级。 */
+    aiThreatAt(u, r, c) {
+      let threat = 0;
+      for (const f of this.opponentsOf(u)) {
+        if (!f.alive || f.offField > 0) continue;
+        const cheb = Math.max(Math.abs(f.r - r), Math.abs(f.c - c));
+        const manh = Math.abs(f.r - r) + Math.abs(f.c - c);
+        let dmg = 0;
+        if (f.hasKnife && cheb <= 1 + (this.hasPassive(f, "dazhan") ? 1 : 0)) {
+          let d = 1;
+          if (this.hasPassive(f, "luhao")) d *= 2;
+          if (this.hasPassive(f, "dage") && isWall(r, c)) d += 1;
+          if (this.hasPassive(f, "weirong")) d += 1;
+          if (f.st.bloodlust > 0) d *= 2;
+          dmg = Math.max(dmg, d);
+        }
+        if (f.hasHorse && isWall(r, c) && isWall(f.r, f.c) && manh <= 3 + (f.boons.horseRange || 0)) dmg = Math.max(dmg, 3);
+        const sk = this.skillOf(f, 0);
+        if (sk && sk.dmg && cheb <= (sk.range || 1) && (f.cds[0] || 0) <= 0 && !f.st.silence) dmg = Math.max(dmg, sk.dmg);
+        threat += dmg;
+      }
+      return threat;
+    }
+
+    aiEstKnife(att, def) {
+      let d = 1;
+      if (this.hasPassive(att, "luhao")) d *= 2;
+      if (this.hasPassive(att, "dage") && isWall(att.r, att.c)) d += 1;
+      if (this.hasPassive(att, "weirong")) d += 1;
+      if (att.boons.knife) d += att.boons.knife;
+      if (att.st.bloodlust > 0) d *= 2 * att.st.bloodlust;
+      if (att.charId === "wenbin" || this.hasPassive(att, "wenbin")) d = Math.round(d * 1.3);
+      return Math.max(1, d);
+    }
+
+    async aiActNightmare(u) {
+      let guard = 0;
+      while (u.apNow > 0 && u.alive && !this.over && guard++ < 10) {
+        const foes = this.opponentsOf(u);
+        if (!foes.length) break;
+        // 枚举可站立格（含原地）
+        const cells = [{ r: u.r, c: u.c }];
+        const reach = this._reachable(u, this.moveRange(u));
+        for (const key of reach.keys) {
+          const [r, c] = key.split(",").map(Number);
+          if (!this.unitAt(r, c) && !(r === u.r && c === u.c)) cells.push({ r, c });
+        }
+        let best = null;
+        for (const cell of cells) {
+          const stand = -this.aiThreatAt(u, cell.r, cell.c) + (isWall(cell.r, cell.c) ? 0.5 : 0);
+          // 该格可执行的行动
+          const acts = [];
+          if (!u.hasKnife) acts.push({ kind: "buyknife", score: 6 });
+          for (const f of foes) {
+            const adj2 = Math.max(Math.abs(cell.r - f.r), Math.abs(cell.c - f.c)) <= 1;
+            if (u.hasKnife && adj2 && !isWall(cell.r, cell.c) && !isWall(f.r, f.c) || (u.hasKnife && adj2)) {
+              const d = this.aiEstKnife(u, f);
+              acts.push({ kind: "knife", t: f, score: d * 3 + (f.hp <= d ? 14 : (f.hp - d <= 3 ? 4 : 0)) });
+            }
+            if (u.hasHorse && isWall(cell.r, cell.c) && isWall(f.r, f.c) && Math.abs(cell.r - f.r) + Math.abs(cell.c - f.c) <= 3) {
+              acts.push({ kind: "horse", t: f, score: 3 * 3 + (f.hp <= 3 ? 14 : 0) });
+            }
+            if (u.hasHorse && !isWall(cell.r, cell.c) && !isWall(f.r, f.c) && adj2) {
+              acts.push({ kind: "drive", t: f, score: 3 });
+            }
+          }
+          // 技能
+          const ch = u.ch;
+          const idxs = ch.skills ? [0, 1] : [0];
+          for (const i of idxs) {
+            const sk = this.skillOf(u, i);
+            if (!sk || !this.skillReady(u, i) || u.apNow < (sk.ap || 1) || u.st.silence > 0) continue;
+            const rng = sk.kind === "adj" ? 1 : (sk.kind === "raoe" ? (sk.range || 2) : (sk.range || 1));
+            if (sk.kind === "self") {
+              if (sk.heal && u.hp <= u.maxhp - 2) acts.push({ kind: "skill", idx: i, t: null, score: sk.heal * 2 });
+              continue;
+            }
+            let bestT = null, bestV = -1;
+            for (const f of foes) {
+              const cheb = Math.max(Math.abs(cell.r - f.r), Math.abs(cell.c - f.c));
+              if (cheb > rng) continue;
+              const v = (sk.dmg || 1) * 2.5 + (f.hp <= (sk.dmg || 1) ? 12 : 0);
+              if (v > bestV) { bestV = v; bestT = f; }
+            }
+            if (bestT) acts.push({ kind: "skill", idx: i, t: bestT, score: bestV });
+          }
+          // 血祭：贴身且血量健康时才划算
+          if (u.hasKnife && u.hp >= 6 && foes.some(f => Math.max(Math.abs(cell.r - f.r), Math.abs(cell.c - f.c)) <= 2)) {
+            acts.push({ kind: "sac", score: 4 });
+          }
+          const top = acts.sort((a, b) => b.score - a.score)[0];
+          if (!top) continue;
+          const total = stand + top.score;
+          if (!best || total > best.score) best = { score: total, cell, act: top };
+        }
+        if (!best || best.score <= -60) break;   // 全图皆死地：干脆不动（等死也好过送死）
+        // 执行
+        if (best.cell.r !== u.r || best.cell.c !== u.c) await this.doMove(u, best.cell.r, best.cell.c);
+        const a = best.act;
+        if (a.kind === "buyknife") await this.doBuyKnife(u);
+        else if (a.kind === "knife") await this.doKnife(u, a.t);
+        else if (a.kind === "horse") await this.doHorse(u, a.t);
+        else if (a.kind === "drive") await this.doDrive(u, a.t);
+        else if (a.kind === "sac") await this.doSacrifice(u);
+        else if (a.kind === "skill") await this.doSkill(u, a.idx, a.t);
+        await sleep(200);
+      }
+      // 剩余行动点：向最近的敌人逼近（不浪费节奏）
+      if (u.apNow > 0 && u.alive && !this.over) {
+        const foes = this.opponentsOf(u);
+        if (foes.length) {
+          const t = foes.sort((a, b) => manh(u, a) - manh(u, b))[0];
+          const step = this._stepToward(u, t);
+          if (step && !(step[0] === u.r && step[1] === u.c)) await this.doMove(u, step[0], step[1]);
+        }
+      }
+    }
+
     async aiAct(u) {
       // 回合开始状态结算
       if (u.offField > 0) {
@@ -5785,6 +5908,11 @@ window.SJI_ENGINE = (function () {
       }
       window.SJI_UI.onState();
       await sleep(240);
+      if (this.diff === "nightmare") {
+        await this.aiActNightmare(u);
+        this._tickStatusEnd(u);
+        return;
+      }
       let guard = 0;
       const prof = (u.side === "ally")
         ? CFG.AI_ALLY
@@ -7197,10 +7325,11 @@ const Blades = (() => {
     const up = upgrades();
     const upDesc = Object.keys(UPGRADE_BOON)
       .filter(k => up[k]).map(k => UPGRADES.find(u => u.id === k).name).join('、');
+    const innateHp = innates().reduce((a, id) => a + ((INNATE_INFO[id] && INNATE_INFO[id].hp) || 0), 0);
     window.SJI_DATA.CHARACTERS.yinkesi = {
       id: 'yinkesi', name: '音克思', hao: '史官 · ' + rankName(), juan: '各卷',
       glyph: '史', color: '#a63a2b',
-      hp: 10 + hpBonus(),
+      hp: 10 + hpBonus() + innateHp,
       passive: {
         name: eqId ? '刀谱 · ' + rankName() : '白板 · ' + rankName(),
         desc: `胜${wins()}场：血上限+${hpBonus()}，每回合行动点+${apBonus()}。`
@@ -7225,12 +7354,6 @@ const Blades = (() => {
       battle.player._learnedFrom = equippedSkillId() || null;
       /* 身怀之技（支线永久继承的被动）：注入多来源集合 */
       battle.player._innates = innates().slice();
-      const innateHp = innates().reduce((a, id) => a + ((INNATE_INFO[id] && INNATE_INFO[id].hp) || 0), 0);
-      if (innateHp > 0) {
-        battle.player.maxhp += innateHp;
-        battle.player.hp += innateHp;
-        battle.pushLog("身怀「大腹如斗」：血上限 +" + innateHp + "。");
-      }
       if (innates().length) battle.pushLog("身怀之技：" + innates().map(id => INNATE_INFO[id] ? INNATE_INFO[id].name : '').filter(Boolean).join('、') + "。");
       const n = apBonus();
       for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
@@ -7273,6 +7396,7 @@ const DIFFS = [
   { v: 'normal',  n: '普通', mul: 1.0, tip: '标准强度（默认）' },
   { v: 'hard',    n: '困难', mul: 1.3, tip: '敌方更狠；赏格 ×1.3' },
   { v: 'extreme', n: '极难', mul: 1.6, tip: '敌方 5 动、强制狂攻、击破不回血；赏格 ×1.6' },
+  { v: 'nightmare', n: '噩梦', mul: 2.2, tip: '敌方全员最优行动（枚举走位与行动取最优解）+ 资源碾压；赏格 ×2.2' },
 ];
 const DIFF_BY_V = {};
 DIFFS.forEach(d => DIFF_BY_V[d.v] = d);
@@ -7944,6 +8068,23 @@ const Quests = (() => {
       this.render();
       return '<div class="result-extra">' + lines.join('') + '</div>';
     },
+    /* 老档迁移：已完成的支线若奖励含身怀之技，一次性静默补发（否则老玩家永远拿不到） */
+    migrateInnates() {
+      let got = [];
+      for (const q of this.sideList()) {
+        if (G.quests[q.id] && q.reward && q.reward.innate && !Blades.innates().includes(q.reward.innate)) {
+          Blades.innates().push(q.reward.innate);
+          const info = Blades.INNATE_INFO[q.reward.innate];
+          got.push(info ? '「' + info.name + '」' : q.reward.innate);
+        }
+      }
+      if (got.length) {
+        Save.write();
+        if (Blades.hasCard && window.SJI_DATA) Blades.registerChar();
+        toast('身怀之技补发（按已完成的支线）：' + got.join(''), '承');
+      }
+      return got.length;
+    },
     /* 出战名册 */
     roster() { if (!G.roster) G.roster = ['yinkesi']; return G.roster; },
     unlockFighter(id) {
@@ -8202,9 +8343,9 @@ window.SJI_UI = (function () {
     $("#round-no").textContent = "第 " + battle.round + " 回合" + (battle.mode === "survival" ? " · 第" + battle.survivalWaveNo + "波" : "");
     if ($("#ai-label")) {
       const nm = CFG.AI_LABEL || {};
-      const dn = { easy: "简单", normal: "普通", hard: "困难", extreme: "极难" };
+      const dn = { easy: "简单", normal: "普通", hard: "困难", extreme: "极难", nightmare: "噩梦" };
       const diffTxt = dn[battle.diff] || "普通";
-      const aiTxt = (battle.diff === "extreme") ? "狂攻(强制)" : (nm[battle.aiAggr] || "主动");
+      const aiTxt = (battle.diff === "nightmare") ? "最优(强制)" : ((battle.diff === "extreme") ? "狂攻(强制)" : (nm[battle.aiAggr] || "主动"));
       $("#ai-label").textContent = diffTxt + " · AI " + aiTxt;
     }
   }
@@ -9170,6 +9311,8 @@ const Main = (() => {
     /* 章节达标即解锁世界内容（协会/试炼/生存），老档与新档一视同仁 */
     Engine.syncChapter();
     Engine.syncWorldFlags();
+    /* 老档补发：已完成支线对应的身怀之技（一次性静默补齐，toast 汇总） */
+    if (window.Quests && Quests.migrateInnates) Quests.migrateInnates();
   }
 
   /* ---------- 任务：接战 / 完成回流 ---------- */
@@ -9504,10 +9647,13 @@ const Main = (() => {
         const ch = window.SJI_DATA.CHARACTERS[id];
         if (!ch) return;
         const sk = Blades.skillCardOf(id);
+        /* 支线获得的身怀被动：追加写在对应角色的卡面上 */
+        const innate = Blades.innates().includes(id) ? Blades.INNATE_INFO[id] : null;
         const c = el('div', 'card');
         c.style.cssText = 'display:flex;align-items:center;gap:12px';
-        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${ch.name} <span class="phao" style="color:var(--cinnabar);font-size:12px">${ch.hao}</span></h3>
-          <div class="meta">${sk ? `「${sk.name}」：${sk.desc}` : '（其技不可录，徒留其名）'}</div></div>`;
+        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${ch.name} <span class="phao" style="color:var(--cinnabar);font-size:12px">${ch.hao}</span>${innate ? '<span class="pill jade" style="margin-left:5px">身怀</span>' : ''}</h3>
+          <div class="meta">${sk ? `「${sk.name}」：${sk.desc}` : '（其技不可录，徒留其名）'}</div>
+          ${innate ? `<div class="meta" style="color:var(--jade)">身怀被动「${innate.name}」：${innate.desc}（支线所授，常驻生效）</div>` : ''}</div>`;
         const b = el('button', 'btn' + (eqId === id ? ' btn-primary' : ''), eqId === id ? '出战中' : (sk ? '换此技' : '不可选'));
         b.style.padding = '8px 14px';
         if (!sk || eqId === id) b.disabled = true;
