@@ -23,7 +23,7 @@ function newGameState() {
     ach: {},
     flags: { visitedScenes:['playground'], metPeople:[], prologue:false, duelBanDays:0 },
     wins: 0, duelsLost: 0,
-    blades: { cards: [], equip: null, rare: [] },   // 刀谱：击败者 id → 录技；rare → 试炼稀有刀卡
+    blades: { cards: [], equip: null, rare: [], rareOn: [], rareInit: true },   // 刀谱：击败者 id → 录技；rareOn → 生效中的稀有刀卡
     quests: {},              // 任务完成记录（主线 9 节 + 支线 7 条）
     roster: ['yinkesi'],     // 出战名册（支线解锁强力人物）
     trialDone: {},           // 试炼首通记录
@@ -172,6 +172,7 @@ const ACHIEVEMENTS = [
   { id:'ach_champion',name:'协会冠军',  icon:'🏆', desc:'赢下世界马刀协会锦标赛三连胜。' },
   { id:'ach_surv10',  name:'苔藓不尽',  icon:'🌾', desc:'破败城墙生存抵达第 10 波。' },
   { id:'ach_trial',   name:'试炼者',    icon:'⛰', desc:'六场高难试炼全部首通。' },
+  { id:'ach_upgrade', name:'有备而来',  icon:'💪', desc:'养成模式下第一次修炼成功。' },
   { id:'ach_quest',   name:'听令行事',  icon:'📜', desc:'完成第一个任务。' },
   { id:'ach_jntm',    name:'鸡你太美',  icon:'🏀', desc:'只因在榻上高歌，自扫舍七日。' },
   { id:'ach_sayyou',  name:'适可而止',  icon:'🎤', desc:'李帆唱完 Say You Say Me 的第三次笑场。' },

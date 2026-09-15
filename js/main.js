@@ -8,7 +8,10 @@ const Main = (() => {
     if (G.duelsLost == null) G.duelsLost = 0;
     if (!G.blades) G.blades = { cards: [], equip: null, rare: [] };
     if (!G.blades.rare) G.blades.rare = [];
+    if (!G.blades.rareInit) { G.blades.rareOn = (G.blades.rare || []).slice(); G.blades.rareInit = true; }   // 老档迁移：已持有的稀有卡默认全部生效
+    if (!G.blades.rareOn) G.blades.rareOn = [];
     if (!G.quests) G.quests = {};
+    if (G.cultivation == null) G.cultivation = false;
     if (!G.roster || !G.roster.length) G.roster = ['yinkesi'];
     if (!G.trialDone) G.trialDone = {};
     if (!G.duelDone) G.duelDone = {};
@@ -315,10 +318,31 @@ const Main = (() => {
       const eqId = Blades.equippedSkillId();
       const eqSk = eqId ? Blades.skillCardOf(eqId) : null;
       body.appendChild(el('div', 'card', `
-        <h3>称号：${Blades.rankName()} <span class="pill gold">胜 ${w} 场</span>${G.duelsLost ? `<span class="pill gray">败 ${G.duelsLost}</span>` : ''}</h3>
-        <div class="meta">称号仅表战绩，无数值加成——成长全凭刀谱之技与身怀之技。</div>
+        <h3>称号：${Blades.rankName()} <span class="pill gold">胜 ${w} 场</span>${G.duelsLost ? `<span class="pill gray">败 ${G.duelsLost}</span>` : ''}<span class="pill ${G.cultivation ? 'jade' : 'gray'}" style="margin-left:5px">${G.cultivation ? '养成模式' : '纯白板'}</span></h3>
+        <div class="meta">${G.cultivation
+          ? `养成加成：血上限 +${Blades.hpBonus()} · 每回合行动点 +${Blades.apBonus()}`
+          : '纯白板：无数值养成——成长全凭刀谱之技、身怀之技与稀有刀卡。'}</div>
         <div style="height:8px"></div>
         <div class="meta">当前技：${eqSk ? `「${eqSk.name}」——${eqSk.desc}` : '<b style="color:var(--cinnabar)">白板无技</b>——赢下第一场对决，录他一技。'}</div>`));
+      /* 修炼（养成模式专用）：花零花钱买永久强化 */
+      if (G.cultivation) {
+        body.appendChild(el('div', 'muted', '<div style="height:12px"></div>修炼 · 花零花钱买永久强化：'));
+        Blades.UPGRADES.forEach(u => {
+          const lv = Blades.upgrades()[u.id] || 0;
+          const maxed = lv >= u.max;
+          const cost = u.price(lv);
+          const c = el('div', 'card');
+          c.style.cssText = 'display:flex;align-items:center;gap:12px';
+          c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${u.name} <span class="pill gray">Lv.${lv}/${u.max}</span></h3>
+            <div class="meta">${u.desc}${maxed ? ' · 已臻化境' : ` · 花费 ◉${cost}`}</div></div>`;
+          const b = el('button', 'btn' + (maxed ? '' : ' btn-primary'), maxed ? '已成' : '修炼');
+          b.style.padding = '8px 14px';
+          if (maxed) b.disabled = true;
+          else b.onclick = () => { if (Blades.buyUpgrade(u.id)) { UI.closePanel(); panelBlades(); } };
+          c.appendChild(b);
+          body.appendChild(c);
+        });
+      }
       /* 身怀之技（支线永久继承的被动，可叠加、无需装备） */
       const inn = Blades.innates();
       if (inn.length) {
@@ -330,13 +354,22 @@ const Main = (() => {
           body.appendChild(el('div', 'card', `<h3 style="margin:0">「${info.name}」<span class="pill jade">常驻</span><span class="pill gray" style="margin-left:5px">承自 ${ch ? ch.hao : id}</span></h3><div class="meta">${info.desc}</div>`));
         });
       }
-      /* 稀有刀卡（试炼首通所授） */
+      /* 稀有刀卡（试炼/支线所授）：每张独立开关，生效数量自定 */
       const rares = Blades.rareList();
       if (rares.length) {
-        body.appendChild(el('div', 'muted', '<div style="height:12px"></div>稀有刀卡 · 高难试炼首通所授，每场常驻：'));
+        body.appendChild(el('div', 'muted', '<div style="height:12px"></div>稀有刀卡 · 每张独立开关，生效几张由你决定（战场左上角同款开关）：'));
         rares.forEach(bid => {
           const rw = Blades.RARE_BOONS[bid];
-          if (rw) body.appendChild(el('div', 'card', `<h3 style="margin:0">「${rw.name}」<span class="pill">常驻</span></h3><div class="meta">${rw.desc}</div>`));
+          if (!rw) return;
+          const on = Blades.isRareOn(bid);
+          const c = el('div', 'card');
+          c.style.cssText = 'display:flex;align-items:center;gap:12px';
+          c.innerHTML = `<div style="flex:1"><h3 style="margin:0">「${rw.name}」<span class="pill ${on ? 'jade' : 'gray'}">${on ? '生效中' : '已封存'}</span></h3><div class="meta">${rw.desc}</div></div>`;
+          const b = el('button', 'btn' + (on ? '' : ' btn-primary'), on ? '收回' : '启用');
+          b.style.padding = '8px 14px';
+          b.onclick = (e) => { e.stopPropagation(); Blades.toggleRare(null, bid); toast(Blades.isRareOn(bid) ? `启用「${rw.name}」` : `收回「${rw.name}」`, '谱'); UI.closePanel(); panelBlades(); };
+          c.appendChild(b);
+          body.appendChild(c);
         });
       }
       /* 录技列表 */
@@ -371,8 +404,26 @@ const Main = (() => {
   /* 开卷前先择难度：主线皆高难关卡，难度只改敌方强度与赏格，不改剧情 */
   function pickDifficulty() {
     const cur = Quests.diffV();
+    let cult = false;   // 养成模式：默认关
     UI.openPanel('择难度 · 新的史官', body => {
       body.appendChild(el('div', 'muted', '主线皆高难关卡。难度只改敌方强度与赏格，不改剧情；开卷后仍可在「系统 · 设置」随时更改。'));
+      /* 养成模式开关（可选） */
+      const cultRow = el('div', 'card');
+      const renderCult = () => {
+        cultRow.innerHTML = `<div style="flex:1"><h3 style="margin:0">养成模式 <span class="pill ${cult ? 'jade' : 'gray'}">${cult ? '开' : '关'}</span></h3>
+          <div class="meta">开：胜场升段位（血上限/行动点加成）且可在刀谱花零花钱修炼；关：纯白板，全凭刀谱之技、身怀之技与稀有刀卡。</div></div>
+          <div style="display:flex;gap:6px">
+            <button class="btn ${!cult ? 'btn-primary' : ''}" data-v="off" style="padding:7px 14px">关</button>
+            <button class="btn ${cult ? 'btn-primary' : ''}" data-v="on" style="padding:7px 14px">开</button>
+          </div>`;
+        cultRow.style.cssText = 'display:flex;align-items:center;gap:12px;margin-top:10px';
+        cultRow.querySelectorAll('[data-v]').forEach(b => {
+          b.onclick = e => { e.stopPropagation(); cult = b.dataset.v === 'on'; Sfx.tap(); renderCult(); };
+        });
+      };
+      cultRow.style.cssText = 'display:flex;align-items:center;gap:12px;margin-top:10px';
+      body.appendChild(cultRow);
+      renderCult();
       body.appendChild(el('div', '', '<div style="height:10px"></div>'));
       DIFFS.forEach(d => {
         const c = el('div', 'card');
@@ -381,20 +432,23 @@ const Main = (() => {
           <div class="meta">${d.tip}</div></div>`;
         const b = el('button', 'btn' + (d.v === cur ? ' btn-primary' : ''), d.v === cur ? '按此开卷' : '选此');
         b.style.padding = '8px 16px';
-        b.onclick = e => { e.stopPropagation(); beginNewGame(d.v); };
+        b.onclick = e => { e.stopPropagation(); beginNewGame(d.v, cult); };
         c.appendChild(b);
-        c.onclick = () => beginNewGame(d.v);
+        c.onclick = () => beginNewGame(d.v, cult);
         body.appendChild(c);
       });
       body.appendChild(el('div', 'muted', '<div style="height:12px"></div>开卷后：世界自由来去；主线指引在右侧任务卡；走近「令」标记即可开战。'));
     });
   }
-  function beginNewGame(diffV) {
+  function beginNewGame(diffV, cult) {
     if (window.SJI_SAVE && SJI_SAVE.setSetting) SJI_SAVE.setSetting('lastDiff', diffV);
     UI.closePanel();
     Sfx.tap();
-    G = newGameState(); normalizeG(); Engine.award('ach_start'); Save.write();
+    G = newGameState(); normalizeG();
+    G.cultivation = !!cult;
+    Save.write();
     startChapter(true);
+    setTimeout(() => toast(G.cultivation ? '养成模式：胜场升段位，刀谱可修炼' : '纯白板模式：成长只凭刀谱之技、身怀之技与稀有刀卡', G.cultivation ? '炼' : '白'), 900);
   }
 
   function bindTitle() {

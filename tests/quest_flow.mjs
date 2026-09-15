@@ -58,7 +58,7 @@ await page.waitForTimeout(600);
 const panelTitle = await page.evaluate(() => document.querySelector('#panel-title').textContent);
 check('开卷前弹出难度选择面板', /难度/.test(panelTitle), panelTitle);
 const diffBtns = await page.evaluate(() => [...document.querySelectorAll('#panel-body .card h3')].map(h => h.textContent.trim()));
-check('五档难度齐列', diffBtns.length === 5, diffBtns.join(' | '));
+check('五档难度齐列（另有养成开关卡）', diffBtns.length === 6, diffBtns.join(' | '));
 
 // 选「极难」（第 4 档）
 await page.evaluate(() => {

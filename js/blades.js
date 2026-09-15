@@ -30,6 +30,18 @@ const BATTLE_ITEMS = {
   spin:      { boon: 'b_horse', label: '马踢伤害 +1' },
 };
 
+/* 修炼（养成模式专用）：零花钱买的永久强化（刀谱面板购买，映射到既有增益体系） */
+const UPGRADES = [
+  { id: 'hp',    name: '体魄', desc: '血上限 +2', max: 3, price: lv => 12 + lv * 8 },
+  { id: 'knife', name: '刀锋', desc: '刀击伤害 +1', max: 1, price: () => 25 },
+  { id: 'horse', name: '马政', desc: '马踢伤害 +1', max: 1, price: () => 25 },
+  { id: 'dodge', name: '轻功', desc: '闪避 +15%', max: 1, price: () => 20 },
+  { id: 'regen', name: '吐纳', desc: '每回合回复 1 血', max: 1, price: () => 30 },
+  { id: 'cd',    name: '算学', desc: '技能冷却 -1', max: 1, price: () => 30 },
+  { id: 'ap',    name: '气力', desc: '每回合行动点 +1', max: 1, price: () => 45 },
+];
+const UPGRADE_BOON = { knife: 'b_knife', horse: 'b_horse', dodge: 'b_dodge', regen: 'b_regen', cd: 'b_cd', ap: 'b_ap' };
+
 /* 身怀之技：支线完成永久继承的角色被动（可多张叠加、无需装备；hp 为额外生命上限）。
    机制侧由引擎 hasPassive(u, charId) 判定（_innates 注入），血量侧由 applyBoons 注入。 */
 const INNATE_INFO = {
@@ -102,29 +114,56 @@ const Blades = (() => {
     return false;
   }
 
-  /* 段位仅为称号（无数值加成）——养成只走刀谱卡与身怀之技 */
+  function upgrades() {
+    if (!window.G) return {};
+    G.upgrades = G.upgrades || {};
+    return G.upgrades;
+  }
+  /* 养成模式开关：关=纯白板（无数值加成），开=段位+修炼生效 */
+  function cultivation() { return !!(window.G && window.G.cultivation); }
+  /* 段位 → 战斗加成（仅养成模式） */
+  function hpBonus() { return cultivation() ? Math.min(4, Math.floor(wins() / 8)) + (upgrades().hp || 0) * 2 : 0; }
+  function apBonus() { return cultivation() ? Math.min(3, Math.floor(wins() / 15)) + (upgrades().ap || 0) : 0; }
+
+  function buyUpgrade(id) {
+    if (!cultivation()) { toast('养成模式未开：开卷时可选「养成模式」', '禁'); return false; }
+    const def = UPGRADES.find(u => u.id === id);
+    if (!def) return false;
+    const lv = upgrades()[id] || 0;
+    if (lv >= def.max) return false;
+    const cost = def.price(lv);
+    if (G.money < cost) { toast(`零花钱不够（需 ◉${cost}）`, '恶'); return false; }
+    Engine.addMoney(-cost);
+    upgrades()[id] = lv + 1;
+    if (window.SJI_DATA) registerChar();
+    Save.write();
+    toast(`修炼有成：「${def.name}」${def.desc}`, '炼');
+    Engine.award('ach_upgrade');
+    return true;
+  }
+
   function grantRare(boonId) {
     const def = RARE_BOONS[boonId];
     if (!def) return false;
     if (!rareList().includes(boonId)) {
       rareList().push(boonId);
-      Save.write();
-      toast(`稀有刀卡入手：「${def.name}」——${def.desc}`, '谱');
+      rareOn().push(boonId);   // 新入手默认启用（可在战场左上角或刀谱面板关闭）
+      if (typeof Save !== 'undefined') Save.write();
+      if (window.toast) toast(`稀有刀卡入手：「${def.name}」——${def.desc}`, '谱');
       return true;
     }
     return false;
   }
 
-  /* 稀有刀卡每场只能携带一张：selectedRare 返回当前携带者（缺省取第一张） */
-  function selectedRare() {
-    const list = rareList();
-    if (!list.length) return null;
-    const cur = G.blades.rareEquip;
-    if (cur && list.includes(cur)) return cur;
-    G.blades.rareEquip = list[0];
-    return list[0];
+  /* 稀有刀卡：每张独立开关，生效数量由玩家自定（rareOn = 当前生效集合） */
+  function rareOn() {
+    if (!window.G) return [];
+    if (!G.blades) G.blades = { cards: [], equip: null };
+    G.blades.rareOn = (G.blades.rareOn || []).filter(id => rareList().includes(id));
+    return G.blades.rareOn;
   }
-  /* 战斗中切换携带：旧卡效果移除、新卡生效（增益字段一一逆操作） */
+  function isRareOn(id) { return rareOn().includes(id); }
+  /* 战斗中切换：开=注入增益，关=移除增益（增益字段一一逆操作） */
   function _removeBoonFx(u, id) {
     const b = u.boons;
     switch (id) {
@@ -145,15 +184,22 @@ const Blades = (() => {
       case 'b_firststrike': b.firstStrike = Math.max(0, (b.firstStrike || 0) - 1); break;
     }
   }
-  function switchRare(battle, boonId) {
+  function toggleRare(battle, boonId) {
     if (!RARE_BOONS[boonId] || !rareList().includes(boonId)) return false;
-    const cur = selectedRare();
-    if (battle && cur && cur !== boonId && !battle.over) _removeBoonFx(battle.player, cur);
-    G.blades.rareEquip = boonId;
-    if (battle) {
-      const boon = window.SJI_DATA.BOONS.find(b => b.id === boonId);
-      if (boon) battle._applyBoon(battle.player, boon);
-      battle.pushLog("更换携带刀卡：「" + RARE_BOONS[boonId].name + "」。（每场仅可携带一张）");
+    const on = isRareOn(boonId);
+    if (on) {
+      const list = rareOn();
+      const i = list.indexOf(boonId);
+      if (i >= 0) list.splice(i, 1);
+      if (battle && !battle.over) _removeBoonFx(battle.player, boonId);
+      battle && battle.pushLog("收回稀有刀卡：「" + RARE_BOONS[boonId].name + "」。（效果即刻解除）");
+    } else {
+      rareOn().push(boonId);
+      if (battle && !battle.over) {
+        const boon = window.SJI_DATA.BOONS.find(b => b.id === boonId);
+        if (boon) battle._applyBoon(battle.player, boon);
+      }
+      battle && battle.pushLog("启用稀有刀卡：「" + RARE_BOONS[boonId].name + "」。（即刻生效）");
     }
     if (typeof Save !== 'undefined') Save.write();
     return true;
@@ -207,10 +253,12 @@ const Blades = (() => {
     window.SJI_DATA.CHARACTERS.yinkesi = {
       id: 'yinkesi', name: '音克思', hao: '史官 · ' + rankName(), juan: '各卷',
       glyph: '史', color: '#a63a2b',
-      hp: 10 + innateHp,
+      hp: 10 + hpBonus() + innateHp,
       passive: {
         name: eqId ? '刀谱 · ' + rankName() : '白板 · ' + rankName(),
-        desc: `称号「${rankName()}」（胜${wins()}场，纯荣誉）。`
+        desc: (cultivation()
+          ? `养成中：血上限+${hpBonus()}，每回合行动点+${apBonus()}（胜${wins()}场）。`
+          : `称号「${rankName()}」（胜${wins()}场，纯荣誉）。`)
           + (eqId ? `技与被动承「${window.SJI_DATA.CHARACTERS[eqId].hao}」——其被动机制对汝生效。`
                  : '白板无技——去赢一场，录他一技（连被动一并承之）。')
           + (innates().length ? ` 身怀：${innates().map(id => INNATE_INFO[id] ? '「' + INNATE_INFO[id].name + '」' : '').join('')}（常驻）。` : ''),
@@ -229,9 +277,20 @@ const Blades = (() => {
     if (asLead) {
       /* 获得角色 = 获得其全部技能：装备谁的卡，其被动机制即对音克思生效（引擎 hasPassive 多来源） */
       battle.player._learnedFrom = equippedSkillId() || null;
+      if (battle.player._learnedFrom) {
+        const src = window.SJI_DATA.CHARACTERS[battle.player._learnedFrom];
+        battle.pushLog("承「" + src.hao + "」之技与被动「" + (src.passive ? src.passive.name : '') + "」。");
+      }
       /* 身怀之技（支线永久继承的被动）：注入多来源集合 */
       battle.player._innates = innates().slice();
       if (innates().length) battle.pushLog("身怀之技：" + innates().map(id => INNATE_INFO[id] ? INNATE_INFO[id].name : '').filter(Boolean).join('、') + "。");
+      if (cultivation()) {
+        const n = apBonus();
+        for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
+        for (const id of Object.keys(UPGRADE_BOON)) {
+          if ((upgrades()[id] || 0) > 0) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === UPGRADE_BOON[id]));
+        }
+      }
     }
     /* 文笔文斗（约战前选择）：骂阵削敌 / 檄文减冷却；此时才扣文笔 */
     const duelWen = (window.G && G.flags && G.flags.duelWen) || null;
@@ -250,12 +309,14 @@ const Blades = (() => {
       window.G.flags.duelWen = null;
       if (typeof Save !== 'undefined') Save.write();
     }
-    /* 稀有刀卡：每场只能携带一张（左上角可切换） */
-    const carried = selectedRare();
-    if (carried) {
-      const boon = window.SJI_DATA.BOONS.find(b => b.id === carried);
+    /* 稀有刀卡：生效数量由玩家自定（逐张开关） */
+    rareOn().forEach(bid => {
+      const boon = window.SJI_DATA.BOONS.find(b => b.id === bid);
       if (boon) battle._applyBoon(battle.player, boon);
-    }
+    });
+    /* 开战明示：本场哪些东西在生效（承技/身怀/稀有卡） */
+    const carryNames = rareOn().map(bid => (RARE_BOONS[bid] || {}).name).filter(Boolean);
+    if (carryNames.length) battle.pushLog("携带稀有刀卡：" + carryNames.map(n => '「' + n + '」').join('') + "。");
     const itemId = (window.G && G.flags && G.flags.duelItem) || null;
     if (itemId && BATTLE_ITEMS[itemId]) {
       const boon = window.SJI_DATA.BOONS.find(b => b.id === BATTLE_ITEMS[itemId].boon);
@@ -267,8 +328,8 @@ const Blades = (() => {
 
   return { registerChar, grant, equip, cards, hasCard, skillCardOf, equippedSkillId,
            rankName, applyBoons, grantRare,
-           innates, grantInnate, INNATE_INFO,
-           selectedRare, switchRare,
+           innates, grantInnate, INNATE_INFO, cultivation,
+           rareOn, isRareOn, toggleRare, buyUpgrade, upgrades, UPGRADES, hpBonus, apBonus,
            rareList, RARE_BOONS, BATTLE_ITEMS, BLADE_RANKS };
 })();
 
