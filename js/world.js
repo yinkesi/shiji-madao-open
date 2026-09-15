@@ -162,6 +162,7 @@ const World = (() => {
     refreshNPCs();
     UI.renderPlaces();
     UI.renderHearsay();
+    if (typeof Quests !== 'undefined') Quests.render();
   }
   function doorTarget(d) {
     const sc = SCENE_BY_ID[d.to];
@@ -286,6 +287,23 @@ const World = (() => {
       ctx.fillStyle = '#f3efe4'; ctx.font = '11px sans-serif';
       ctx.fillText(ev.name, ev.pos[0], ev.pos[1] - 12);
     });
+    // 任务标记（主线「令」／支线「刀」）
+    if (typeof Quests !== 'undefined') {
+      Quests.markers().forEach(mk => {
+        if (mk.q.where !== sceneId) return;
+        const bob = Math.sin(now / 320 + mk.q.pos[1]) * 4;
+        const col = mk.main ? '#a8842c' : '#3e7a5e';
+        ctx.fillStyle = col;
+        ctx.beginPath(); ctx.arc(mk.q.pos[0], mk.q.pos[1] - 52 + bob, 14, 0, 7); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(mk.q.pos[0], mk.q.pos[1] - 52 + bob, 14, 0, 7); ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 16px serif'; ctx.textAlign = 'center';
+        ctx.fillText(mk.main ? '令' : '刀', mk.q.pos[0], mk.q.pos[1] - 46 + bob);
+        ctx.fillStyle = 'rgba(40,30,20,.78)'; roundRect(ctx, mk.q.pos[0] - 46, mk.q.pos[1] - 32, 92, 20, 10); ctx.fill();
+        ctx.fillStyle = '#f3efe4'; ctx.font = '11px sans-serif';
+        ctx.fillText(mk.q.name, mk.q.pos[0], mk.q.pos[1] - 18);
+      });
+    }
     // NPC
     const sortables = npcs.map(n => ({ y: n.y, draw: () => drawNPC(n, now) }));
     sortables.push({ y: player.y, draw: () => drawPlayer(now) });
@@ -393,6 +411,11 @@ const World = (() => {
     // 热点
     const ev = Engine.eventsNow().find(ev => ev.scene === sceneId && Math.hypot(w.x - ev.pos[0], w.y - ev.pos[1] + 20) < 44);
     if (ev) { Main.onEvent(ev); return; }
+    // 任务标记
+    if (typeof Quests !== 'undefined') {
+      const mk = Quests.markers().find(mk => mk.q.where === sceneId && Math.hypot(w.x - mk.q.pos[0], w.y - mk.q.pos[1] + 26) < 46);
+      if (mk) { Main.onQuest(mk.q); return; }
+    }
     // NPC
     const n = npcs.find(n => Math.hypot(w.x - n.x, w.y - n.y + 6) < 36);
     if (n) { Main.onNPC(n.p); return; }
@@ -417,6 +440,10 @@ const World = (() => {
       if (!best) {
         let bd = 90;
         npcs.forEach(n => { const d = Math.hypot(n.x - player.x, n.y - player.y); if (d < bd) { bd = d; best = { type: 'npc', p: n.p }; } });
+      }
+      if (!best && typeof Quests !== 'undefined') {
+        const qm = Quests.nearMarker(sceneId, player.x, player.y, 100);
+        if (qm) best = { type: 'quest', q: qm.m.q, main: qm.m.main };
       }
       if (!best) {
         const door = scene.doors.find(d => Math.hypot(d.x + d.w / 2 - player.x, d.y + d.h / 2 - player.y) < 70);

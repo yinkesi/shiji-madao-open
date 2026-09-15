@@ -424,6 +424,27 @@ body.theme-night .shard-card { background: #2e2b23; border-color: rgba(255,255,2
 #mg-canvas { border-radius: 22px; box-shadow: var(--shadow-2); max-width: 100vw; max-height: 100vh; }
 #mg-hud { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); padding: 8px 18px; z-index: 72; font-size: 14px; font-weight: 700; }
 
+/* 任务指引卡 */
+#questcard {
+  position: absolute; top: 206px; right: 12px; width: 252px;
+  max-height: 46vh; overflow-y: auto; padding: 11px 13px; z-index: 15; border-radius: 16px;
+}
+#questcard .qc-tag {
+  display: inline-block; font-size: 10.5px; font-weight: 800; letter-spacing: .18em;
+  background: linear-gradient(180deg,#c8523c,var(--cinnabar)); color: #fff8f2;
+  border-radius: 999px; padding: 1px 9px; margin-bottom: 5px;
+}
+#questcard .qc-tag.done { background: var(--jade); }
+#questcard .qc-name { font-family: var(--font-cl); font-size: 15.5px; font-weight: 800; }
+#questcard .qc-goal { font-size: 12.5px; color: var(--ink); line-height: 1.45; margin-top: 3px; }
+#questcard .qc-hint { font-size: 11.5px; color: var(--ink-3); line-height: 1.45; margin-top: 3px; }
+#questcard .qc-btn { margin-top: 8px; font-size: 12px; padding: 6px 12px; }
+#questcard .qc-sides { margin-top: 10px; border-top: 1px dashed rgba(150,130,90,.35); padding-top: 8px; }
+#questcard .qc-sides-title { font-size: 11px; font-weight: 800; letter-spacing: .16em; color: var(--gold); margin-bottom: 5px; }
+#questcard .qc-side { font-size: 11.5px; color: var(--ink-2); line-height: 1.5; margin-bottom: 5px; }
+#questcard .qc-side b { color: var(--ink); }
+#questcard .qc-side .qc-btn { margin-top: 2px; font-size: 11px; padding: 3px 9px; }
+
 /* 减少动效 */
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01s !important; transition-duration: .01s !important; }
@@ -671,6 +692,9 @@ body.theme-night #battle { background: radial-gradient(1100px 560px at 78% -12%,
     <div class="hearsay-title">今日风闻</div>
     <div id="hearsay-list"></div>
   </div>
+
+  <!-- 任务指引卡（主线 + 可接支线） -->
+  <div id="questcard" class="glass hidden"></div>
 
   <!-- 底部地点导航条 -->
   <nav id="placelist" class="glass"></nav>
@@ -2472,6 +2496,8 @@ function newGameState() {
     wins: 0, duelsLost: 0,
     blades: { cards: [], equip: null, rare: [] },   // 刀谱：击败者 id → 录技；rare → 试炼稀有刀卡
     upgrades: {},            // 修炼等级：hp/knife/horse/dodge/regen/cd/ap
+    quests: {},              // 任务完成记录
+    roster: ['yinkesi'],     // 出战名册（支线解锁强力人物）
     trialDone: {},           // 试炼首通记录
     duelDone: {},            // duelId -> true（成传战/支线战斗去重）
     settings: { muted:false, motion:'full', speed:1 },
@@ -2624,6 +2650,7 @@ const ACHIEVEMENTS = [
   { id:'ach_surv10',  name:'苔藓不尽',  icon:'🌾', desc:'破败城墙生存抵达第 10 波。' },
   { id:'ach_upgrade', name:'有备而来',  icon:'💪', desc:'第一次修炼成功。（买些道具提升自己）' },
   { id:'ach_trial',   name:'试炼者',    icon:'⛰', desc:'六场高难试炼全部首通。' },
+  { id:'ach_quest',   name:'听令行事',  icon:'📜', desc:'完成第一个任务。' },
   { id:'ach_jntm',    name:'鸡你太美',  icon:'🏀', desc:'只因在榻上高歌，自扫舍七日。' },
   { id:'ach_sayyou',  name:'适可而止',  icon:'🎤', desc:'李帆唱完 Say You Say Me 的第三次笑场。' },
   { id:'ach_direct',  name:'董狐直笔',  icon:'🖋', desc:'第一次选择直笔。史官不删。' },
@@ -2809,6 +2836,7 @@ const World = (() => {
     refreshNPCs();
     UI.renderPlaces();
     UI.renderHearsay();
+    if (typeof Quests !== 'undefined') Quests.render();
   }
   function doorTarget(d) {
     const sc = SCENE_BY_ID[d.to];
@@ -2933,6 +2961,23 @@ const World = (() => {
       ctx.fillStyle = '#f3efe4'; ctx.font = '11px sans-serif';
       ctx.fillText(ev.name, ev.pos[0], ev.pos[1] - 12);
     });
+    // 任务标记（主线「令」／支线「刀」）
+    if (typeof Quests !== 'undefined') {
+      Quests.markers().forEach(mk => {
+        if (mk.q.where !== sceneId) return;
+        const bob = Math.sin(now / 320 + mk.q.pos[1]) * 4;
+        const col = mk.main ? '#a8842c' : '#3e7a5e';
+        ctx.fillStyle = col;
+        ctx.beginPath(); ctx.arc(mk.q.pos[0], mk.q.pos[1] - 52 + bob, 14, 0, 7); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(mk.q.pos[0], mk.q.pos[1] - 52 + bob, 14, 0, 7); ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 16px serif'; ctx.textAlign = 'center';
+        ctx.fillText(mk.main ? '令' : '刀', mk.q.pos[0], mk.q.pos[1] - 46 + bob);
+        ctx.fillStyle = 'rgba(40,30,20,.78)'; roundRect(ctx, mk.q.pos[0] - 46, mk.q.pos[1] - 32, 92, 20, 10); ctx.fill();
+        ctx.fillStyle = '#f3efe4'; ctx.font = '11px sans-serif';
+        ctx.fillText(mk.q.name, mk.q.pos[0], mk.q.pos[1] - 18);
+      });
+    }
     // NPC
     const sortables = npcs.map(n => ({ y: n.y, draw: () => drawNPC(n, now) }));
     sortables.push({ y: player.y, draw: () => drawPlayer(now) });
@@ -3040,6 +3085,11 @@ const World = (() => {
     // 热点
     const ev = Engine.eventsNow().find(ev => ev.scene === sceneId && Math.hypot(w.x - ev.pos[0], w.y - ev.pos[1] + 20) < 44);
     if (ev) { Main.onEvent(ev); return; }
+    // 任务标记
+    if (typeof Quests !== 'undefined') {
+      const mk = Quests.markers().find(mk => mk.q.where === sceneId && Math.hypot(w.x - mk.q.pos[0], w.y - mk.q.pos[1] + 26) < 46);
+      if (mk) { Main.onQuest(mk.q); return; }
+    }
     // NPC
     const n = npcs.find(n => Math.hypot(w.x - n.x, w.y - n.y + 6) < 36);
     if (n) { Main.onNPC(n.p); return; }
@@ -3064,6 +3114,10 @@ const World = (() => {
       if (!best) {
         let bd = 90;
         npcs.forEach(n => { const d = Math.hypot(n.x - player.x, n.y - player.y); if (d < bd) { bd = d; best = { type: 'npc', p: n.p }; } });
+      }
+      if (!best && typeof Quests !== 'undefined') {
+        const qm = Quests.nearMarker(sceneId, player.x, player.y, 100);
+        if (qm) best = { type: 'quest', q: qm.m.q, main: qm.m.main };
       }
       if (!best) {
         const door = scene.doors.find(d => Math.hypot(d.x + d.w / 2 - player.x, d.y + d.h / 2 - player.y) < 70);
@@ -4085,6 +4139,17 @@ const UI = (() => {
       };
       mk('音效', [{ t:'开', v:false }, { t:'静音', v:true }], G.settings.muted, v => { G.settings.muted = v; });
       mk('打字速度', [{ t:'从容', v:1 }, { t:'风驰', v:2 }], G.settings.speed, v => { G.settings.speed = v; });
+      /* 难度自选：写入战斗层设置，直接影响所有对决/试炼/任务的敌方强度与赏格 */
+      if (window.DIFFS && window.SJI_SAVE) {
+        mk('马刀难度', DIFFS.map(d => ({ t: d.n, v: d.v })), Quests.diffV(), v => {
+          SJI_SAVE.setSetting('lastDiff', v);
+          const d = DIFF_BY_V[v];
+          toast(`难度改为「${d.n}」：${d.tip}`, '刀');
+          Save.write();
+        });
+        const dv = DIFF_BY_V[Quests.diffV()];
+        body.appendChild(el('div', 'muted', `当前：${dv.n} —— ${dv.tip}。难度只改敌方强度与赏格，不改剧情。`));
+      }
       body.appendChild(el('div', '', '<div style="height:14px"></div>'));
       const ex = el('div', 'card');
       ex.innerHTML = '<h3>导出存档</h3><div class="meta" style="margin-bottom:8px">换设备或清缓存前，把这串文字保存好。</div>';
@@ -7025,12 +7090,15 @@ const Blades = (() => {
     return window.SJI_DATA.CHARACTERS.yinkesi;
   }
 
-  /* 开战前注入段位加成、修炼与稀有刀卡（在 Battle 构造后调用） */
+  /* 开战前注入加成：音克思享段位+修炼，全名册共享稀有刀卡与道具 */
   function applyBoons(battle) {
-    const n = apBonus();
-    for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
-    for (const id of Object.keys(UPGRADE_BOON)) {
-      if ((upgrades()[id] || 0) > 0) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === UPGRADE_BOON[id]));
+    const asLead = !battle.player.charId || battle.player.charId === 'yinkesi';
+    if (asLead) {
+      const n = apBonus();
+      for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
+      for (const id of Object.keys(UPGRADE_BOON)) {
+        if ((upgrades()[id] || 0) > 0) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === UPGRADE_BOON[id]));
+      }
     }
     for (const bid of rareList()) {
       const boon = window.SJI_DATA.BOONS.find(b => b.id === bid);
@@ -7052,6 +7120,256 @@ const Blades = (() => {
 
 /* 载入即注册音克思战斗卡（G 未建时按 0 胜计；开战时 Blades.registerChar 会按最新胜场重算） */
 try { Blades.registerChar(); } catch (e) {}
+
+</script>
+<script>
+/* 实验史记·马刀行 —— 任务系统：主线任务链（高难关卡）+ 条件触发支线（解锁强力人物/效果）
+   自由度：世界可自由行走，任务是"指引"不是"门禁"；未接主线也能满校园挑战刀手。
+   据卷八《马刀书》兴亡史编排主线。 */
+'use strict';
+
+/* 难度自选：影响敌方强度与赏格（写进 SJI_SAVE.settings.lastDiff，战斗层直接读） */
+const DIFFS = [
+  { v: 'easy',    n: '简单', mul: 0.8, tip: '敌方行动点少、伤害低；赏格 ×0.8' },
+  { v: 'normal',  n: '普通', mul: 1.0, tip: '标准强度（默认）' },
+  { v: 'hard',    n: '困难', mul: 1.3, tip: '敌方更狠；赏格 ×1.3' },
+  { v: 'extreme', n: '极难', mul: 1.6, tip: '敌方 5 动、强制狂攻、击破不回血；赏格 ×1.6' },
+];
+const DIFF_BY_V = {};
+DIFFS.forEach(d => DIFF_BY_V[d.v] = d);
+
+const Quests = (() => {
+
+  /* ============ 主线：马刀兴亡史（每节皆高难关卡） ============
+     need(): 解锁条件；cfg: 战斗配置（rule 特则见 battle/engine.js）；reward: 赏格 */
+  const MAIN = [
+    { id: 'm1', name: '初执马刀', where: 'playground', pos: [750, 450],
+      goal: '操场寻万震，讨教第一刀', hint: '白板之身，先赢一场，录他一技',
+      need: () => true,
+      cfg: { enemies: ['wanzhen'], rule: null },
+      reward: { money: 8, rep: 2 } },
+    { id: 'm2', name: '实验三异能者', where: 'corridor', pos: [720, 260],
+      goal: '连战大哥、神人、仙女三人', hint: '三阵连战，阵间回血；异能者各有异能',
+      need: () => Q.done('m1'),
+      cfg: { enemies: ['dage'], waves: [['dage'], ['shenren'], ['xiannv']], rule: { id: 'dyad', desc: '相邻敌人伤害+1（二声部合唱）' } },
+      reward: { money: 12, rep: 3 } },
+    { id: 'm3', name: '操场三国刀', where: 'playground', pos: [520, 560],
+      goal: '胜小川与鲁豪，夺三国刀之名', hint: '小川缴械、鲁豪刀伤翻倍——先破其一',
+      need: () => Q.done('m2'),
+      cfg: { enemies: ['xiaochuan', 'luhao'], rule: { id: 'dyad', desc: '相邻敌人伤害+1（三国刀同气连枝）' } },
+      reward: { money: 15, rep: 3 } },
+    { id: 'm4', name: '世界马刀协会', where: 'playground', pos: [950, 300],
+      goal: '协会锦标赛三连胜：鲁豪→小川→子琛', hint: '阵间充分休整；子琛会召唤援军',
+      need: () => Q.done('m3'),
+      cfg: { enemies: ['luhao'], waves: [['luhao'], ['xiaochuan'], ['zichen']], restFull: true, hpScale: 0.68,
+             rule: { id: 'uprising', desc: '第三回合敌人援军二人入场（起义）' } },
+      reward: { money: 25, rep: 5, rare: 'b_killheal' } },
+    { id: 'm5', name: '七班刀合流', where: 'classroom7', pos: [540, 430],
+      goal: '胜李帆与头哥，六七合流', hint: '李帆购刀免动、笑场之歌能惑人；头哥免疫击退',
+      need: () => Q.done('m4'),
+      cfg: { enemies: ['lifan', 'touge'], rule: { id: 'stench', desc: '鲍鱼之肆：回合结束相邻敌我互蚀各 1 血' } },
+      reward: { money: 18, rep: 4 } },
+    { id: 'm6', name: '刀禁令风波', where: 'office', pos: [240, 500],
+      goal: '主任钦法坐镇办公楼，闯过去', hint: '钦法当场缴械；此战特则：来人即是巡查',
+      need: () => Q.done('m5'),
+      cfg: { enemies: ['qinfa', 'weibing'], rule: { id: 'suomen', desc: '锁门：楼内无墙可踢，双方马踢不可用' } },
+      reward: { money: 20, rep: 4, unlock: 'qinfa' } },
+    { id: 'm7', name: '马刀之神', where: 'playground', pos: [750, 450],
+      goal: '与 wonder 决战，证马刀之神之名', hint: '〔验算〕他血量为偶则回血——把他打成奇数',
+      need: () => Q.done('m6'),
+      cfg: { enemies: ['wonder'], diff: null, hpScale: 1.4,
+             rule: { id: 'yansuan', desc: '验算：回合末 wonder 血量为偶数则回 1 血——算好伤害' } },
+      reward: { money: 30, rep: 6, rare: 'b_bloodfree', unlock: 'wonder' } },
+    { id: 'm8', name: '终焉之战', where: 'office', pos: [860, 260],
+      goal: '再入校长室，与崇国做个了断', hint: '〔种树不绝〕他每回合种树；为兵为你助阵',
+      need: () => Q.done('m7'),
+      cfg: { enemies: ['qinfa', 'chongguo'], allies: ['weibing'], diff: 'hard', hpScale: 0.78,
+             rule: { id: 'zhongshu', desc: '种树不绝：每回合开始崇国自动种树（至多三株）' } },
+      reward: { money: 40, rep: 8, rare: 'b_horsereach', unlock: 'chongguo' } },
+    { id: 'm9', name: '马刀的结局', where: 'gate', pos: [430, 300],
+      goal: '校门口，为这部刀史收卷', hint: '与最强者（wonder）作最后一战，或和平收卷',
+      need: () => Q.done('m8'),
+      cfg: { enemies: ['wonder'], hpScale: 1.6, diff: 'hard',
+             rule: { id: 'cans', desc: '看台飞瓶：与他同行或同列，回合开始被砸 1 血' } },
+      reward: { money: 60, rep: 12, rare: 'b_cleave' } },
+  ];
+
+  /* ============ 支线：满足条件触发，完成解锁强力人物或永久效果 ============ */
+  const SIDE = [
+    { id: 's_dage', name: '大哥的护手霜', where: 'corridor', pos: [400, 300],
+      goal: '大哥好感≥20，再与他一战', cond: () => Engine.favorOf('dage') >= 20,
+      cfg: { enemies: ['dage'], hpScale: 1.2 },
+      reward: { unlock: 'dage', money: 10, text: '岳豪之梦已录：可点将出征「大哥」' } },
+    { id: 's_xinhui', name: '歆慧的一声滚', where: 'library', pos: [700, 380],
+      goal: '歆慧好感≥25，接她一击', cond: () => Engine.favorOf('xinhui') >= 25,
+      cfg: { enemies: ['xinhui'], hpScale: 1.25, rule: { id: 'dyad', desc: '她的「一声滚」可击退两格——莫贴边' } },
+      reward: { unlock: 'xinhui', money: 12, text: '可点将出征「歆慧」' } },
+    { id: 's_luhao', name: '锦绣昼行', where: 'dorm', pos: [450, 300],
+      goal: '胜鲁豪一次（腹大如斗，刀伤翻倍）', cond: () => Blades.hasCard('luhao'),
+      cfg: { enemies: ['luhao'], hpScale: 1.2 },
+      reward: { rare: 'b_firststrike', money: 15, text: '稀有刀卡「先手刀」入手' } },
+    { id: 's_touge', name: '三溴化氮', where: 'classroom7', pos: [540, 200],
+      goal: '头哥好感≥30，试他的陀螺', cond: () => Engine.favorOf('touge') >= 30,
+      cfg: { enemies: ['touge'], hpScale: 1.3, rule: { id: 'stench', desc: '溴味蚀人：回合末相邻互蚀 1 血——别贴他' } },
+      reward: { unlock: 'touge', money: 12, text: '可点将出征「头哥」' } },
+    { id: 's_guayu', name: '提壶狂奔', where: 'canteen', pos: [540, 170],
+      goal: '胜呱宇一次（二成闪避，难缠）', cond: () => Blades.hasCard('guayu'),
+      cfg: { enemies: ['guayu', 'yiran'], hpScale: 0.85 },
+      reward: { rare: 'b_shield', money: 18, text: '稀有刀卡「班主任的偏爱」入手' } },
+    { id: 's_zichen', name: '体育课起义', where: 'playground', pos: [950, 300],
+      goal: '子琛好感≥35，接他的起义', cond: () => Engine.favorOf('zichen') >= 35,
+      cfg: { enemies: ['zichen'], hpScale: 1.3, rule: { id: 'uprising', desc: '第三回合其二心腹入场（起义）' } },
+      reward: { unlock: 'zichen', money: 15, text: '可点将出征「子琛」' } },
+    { id: 's_win30', name: '以刀会友', where: 'playground', pos: [750, 450],
+      goal: '累计胜 10 场，与协会委员再战一场', cond: () => (G.wins || 0) >= 10,
+      cfg: { enemies: ['luhao', 'xiaochuan', 'zichen'], hpScale: 0.62, rule: { id: 'chaos', desc: '三人各有二成机率打错人（同门相争）' } },
+      reward: { rare: 'b_horse', money: 25, text: '稀有刀卡「马踏连营」入手' } },
+  ];
+
+  const Q = {
+    all() { return MAIN.concat(SIDE); },
+    mainList() { return MAIN.slice(); },
+    sideList() { return SIDE.slice(); },
+    byId(id) { return this.all().find(q => q.id === id); },
+    done(id) { return !!G.quests[id]; },
+    /* 当前主线：第一个未完成的主线 */
+    current() { return MAIN.find(q => !this.done(q.id)) || null; },
+    /* 可接支线：条件满足且未完成 */
+    sideOpen() { return SIDE.filter(q => !this.done(q.id) && q.cond()); },
+    /* 世界上此刻该显示的任务点（主线当前 + 已解锁支线） */
+    markers() {
+      const cur = this.current();
+      const list = [];
+      if (cur) list.push({ q: cur, main: true });
+      this.sideOpen().forEach(q => list.push({ q, main: false }));
+      return list;
+    },
+    /* 玩家附近的任务点（供交互条） */
+    nearMarker(sceneId, x, y, r) {
+      r = r || 100;
+      return this.markers().filter(m => m.q.where === sceneId)
+        .map(m => ({ m, d: Math.hypot(m.q.pos[0] - x, m.q.pos[1] - y) }))
+        .filter(o => o.d < r).sort((a, b) => a.d - b.d)[0] || null;
+    },
+    /* 开战：难度自选 + 出战角色选择 → SJI_UI.startBattle */
+    start(q, fighterId) {
+      const diff = Quests.diffV();
+      Blades.registerChar();
+      const cfg = Object.assign({
+        mode: 'story', questId: q.id,
+        title: (MAIN.indexOf(q) >= 0 ? '主线 · ' : '支线 · ') + q.name,
+        playerChar: fighterId || 'yinkesi',
+        enemies: [], allies: [], diff: diff, aiAggr: 'active',
+      }, q.cfg);
+      if (q.cfg.diff === null) cfg.diff = diff;      // diff:null 表示随玩家难度
+      if (!cfg.rule) cfg.rule = null;
+      SJI_UI.startBattle(cfg);
+    },
+    pickAndStart(q) {
+      const roster = Quests.roster();
+      if (roster.length <= 1) { this.start(q); return; }
+      UI.openPanel('点将出征 · ' + q.name, body => {
+        body.appendChild(el('div', 'muted', '选定出战之人。音克思保有刀谱与修炼；他人以其本卡出战（保留稀有刀卡与道具）。'));
+        body.appendChild(el('div', '', '<div style="height:8px"></div>'));
+        roster.forEach(id => {
+          const ch = window.SJI_DATA.CHARACTERS[id];
+          if (!ch) return;
+          const c = el('div', 'card');
+          c.style.cssText = 'display:flex;align-items:center;gap:12px;cursor:pointer';
+          c.innerHTML = `<span class="tokenface" style="background:${ch.color}">${ch.glyph}</span>
+            <div style="flex:1"><h3 style="margin:0">${ch.name} <span class="phao" style="color:var(--cinnabar);font-size:12px">${ch.hao}</span></h3>
+            <div class="meta">血 ${ch.hp} · 被动「${ch.passive.name}」${ch.skill ? ` · 技「${ch.skill.name}」` : ''}</div></div>`;
+          c.onclick = () => { UI.closePanel(); Quests.start(q, id); };
+          body.appendChild(c);
+        });
+      });
+    },
+    /* 完成结算：发赏、解锁、推进 */
+    complete(q) {
+      const rw = q.reward || {};
+      const mul = DIFF_BY_V[Quests.diffV()].mul;
+      const money = Math.round((rw.money || 0) * mul);
+      const rep = Math.round((rw.rep || 0) * mul);
+      let lines = [`<div><b>任务完成：「${q.name}」</b></div>`];
+      if (money) { Engine.addMoney(money); lines.push(`<div>零花钱 +${money}${mul !== 1 ? `（难度 ×${mul}）` : ''}</div>`); }
+      if (rep) { Engine.addRep(rep); lines.push(`<div>声望 +${rep}</div>`); }
+      if (rw.rare) {
+        const rareDefs = Blades.RARE_BOONS;
+        if (rareDefs[rw.rare] && Blades.grantRare(rw.rare)) lines.push(`<div>稀有刀卡「${rareDefs[rw.rare].name}」入手</div>`);
+        else if (rareDefs[rw.rare]) lines.push(`<div>（稀有刀卡「${rareDefs[rw.rare].name}」已在囊中）</div>`);
+      }
+      if (rw.unlock) {
+        const ch = window.SJI_DATA.CHARACTERS[rw.unlock];
+        if (Quests.unlockFighter(rw.unlock) && ch) lines.push(`<div>强力人物解锁：<b>${ch.name}（${ch.hao}）</b>可点将出征</div>`);
+        else if (ch) lines.push(`<div>（${ch.hao} 早已在列）</div>`);
+      }
+      if (rw.text) lines.push(`<div class="yueks">${rw.text}</div>`);
+      G.quests[q.id] = true;
+      Engine.award('ach_quest');
+      const cur = this.current();
+      if (cur) lines.push(`<div style="margin-top:6px">▸ 新任务：「${cur.name}」——${cur.hint}</div>`);
+      else if (!rw.text || true) lines.push(`<div style="margin-top:6px" class="yueks">音克思曰：刀者，终将入书。全书将成。</div>`);
+      Save.write();
+      render();
+      return '<div class="result-extra">' + lines.join('') + '</div>';
+    },
+    /* 出战名册 */
+    roster() { if (!G.roster) G.roster = ['yinkesi']; return G.roster; },
+    unlockFighter(id) {
+      const r = this.roster();
+      if (r.includes(id)) return false;
+      r.push(id);
+      const ch = window.SJI_DATA.CHARACTERS[id];
+      toast(`强力人物入列：「${ch ? ch.name + '（' + ch.hao + '）' : id}」——点将可选出战`, '将');
+      Save.write(); render();
+      return true;
+    },
+    diffV() {
+      const d = (window.SJI_SAVE && SJI_SAVE.settings.lastDiff) || 'normal';
+      return DIFF_BY_V[d] ? d : 'normal';
+    },
+    /* HUD 任务指引卡 */
+    render() {
+      const box = document.getElementById('questcard');
+      if (!box) return;
+      const cur = this.current();
+      const sides = this.sideOpen();
+      let h = '';
+      if (cur) {
+        const sc = SCENE_BY_ID[cur.where];
+        h += `<div class="qc-main"><div class="qc-tag">主线</div>
+          <div class="qc-name">${cur.name}</div>
+          <div class="qc-goal">${cur.goal}</div>
+          <div class="qc-hint">${cur.hint}</div>
+          <button class="ctx-btn duel qc-btn" data-quests="${cur.id}">前往 · ${sc ? sc.short : cur.where}</button></div>`;
+      } else {
+        h += `<div class="qc-main"><div class="qc-tag done">主线已成</div><div class="qc-name">刀史收卷</div>
+          <div class="qc-goal">纵刀已封，书已成。校园仍可自由来去。</div></div>`;
+      }
+      if (sides.length) {
+        h += `<div class="qc-sides"><div class="qc-sides-title">支线可接（${sides.length}）</div>` +
+          sides.slice(0, 3).map(q => {
+            const sc = SCENE_BY_ID[q.where];
+            return `<div class="qc-side"><b>${q.name}</b> · ${sc ? sc.short : q.where}
+              <button class="ctx-btn qc-btn" data-quests="${q.id}">前往</button></div>`;
+          }).join('') + '</div>';
+      }
+      box.innerHTML = h;
+      box.classList.remove('hidden');
+      box.querySelectorAll('[data-quests]').forEach(b => {
+        b.onclick = (e) => {
+          e.stopPropagation();
+          const q = Quests.byId(b.dataset.quests);
+          if (!q) return;
+          if (World.sceneId !== q.where) World.travel(q.where);
+          setTimeout(() => World.walkTo(q.pos[0], q.pos[1] + 40), 120);
+          toast(`前往：${q.goal}`, '令');
+        };
+      });
+    },
+  };
+  return Q;
+})();
 
 </script>
 <script>
@@ -8180,10 +8498,63 @@ const Main = (() => {
     if (!G.blades) G.blades = { cards: [], equip: null, rare: [] };
     if (!G.blades.rare) G.blades.rare = [];
     if (!G.upgrades) G.upgrades = {};
+    if (!G.quests) G.quests = {};
+    if (!G.roster || !G.roster.length) G.roster = ['yinkesi'];
     if (!G.trialDone) G.trialDone = {};
     if (!G.duelDone) G.duelDone = {};
     if (!G.flags) G.flags = {};
     if (G.flags.duelBanDays == null) G.flags.duelBanDays = 0;
+  }
+
+  /* ---------- 任务：接战 / 完成回流 ---------- */
+  function onQuest(q) {
+    if (!q || Dialog.active || window.BATTLE_ACTIVE) return;
+    const pos = [q.pos[0], q.pos[1]];
+    const [px, py] = World.playerPos;
+    if (Math.hypot(pos[0] - px, pos[1] - py) > 90) { World.walkTo(pos[0], pos[1] + 40); return; }
+    const isMain = Quests.current() && Quests.current().id === q.id;
+    Dialog.play([
+      { who: '音克思', text: (isMain ? '【主线】' : '【支线】') + q.name + '——' + q.goal },
+      { who: '音克思', text: '（' + q.hint + '）' },
+      { who: '对手', text: pick(['来呀来呀。', '规则至简，而引人入胜。', '既来之，则战之。', '重开重开，谁怕谁。']) },
+    ], () => Quests.pickAndStart(q));
+  }
+
+  function panelQuests() {
+    UI.openPanel('任务 · 马刀行', body => {
+      const cur = Quests.current();
+      const mul = DIFF_BY_V[Quests.diffV()];
+      body.appendChild(el('div', 'card', `<h3>当前难度：${mul.n} <span class="pill gold">赏格 ×${mul.mul}</span></h3>
+        <div class="meta">${mul.tip}　·　可在「系统 · 设置」中随时更改</div>`));
+      body.appendChild(el('div', 'muted', '<div style="height:10px"></div>主线 · 马刀兴亡史（每节皆高难关卡）：'));
+      Quests.mainList().forEach(q => {
+        const done = Quests.done(q.id); const open = q.need ? q.need() : true;
+        const c = el('div', 'card');
+        c.style.cssText = 'display:flex;align-items:center;gap:12px;opacity:' + (open ? 1 : 0.5);
+        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${q.name} ${done ? '<span class="pill jade">已成</span>' : cur && cur.id === q.id ? '<span class="pill">进行中</span>' : open ? '' : '<span class="pill gray">未接</span>'}</h3>
+          <div class="meta">${q.goal}　·　${q.hint}</div></div>`;
+        const b = el('button', 'btn' + (open && !done ? ' btn-primary' : ''), done ? '已成' : '前往');
+        b.style.padding = '7px 13px';
+        if (done) b.disabled = true;
+        else b.onclick = () => { UI.closePanel(); const sc = SCENE_BY_ID[q.where]; if (World.sceneId !== q.where) World.travel(q.where); setTimeout(() => onQuest(q), 150); };
+        c.appendChild(b);
+        body.appendChild(c);
+      });
+      body.appendChild(el('div', 'muted', '<div style="height:12px"></div>支线 · 满足条件可接（完成即解锁强力人物或永久效果）：'));
+      Quests.sideList().forEach(q => {
+        const done = Quests.done(q.id); const open = q.cond();
+        const c = el('div', 'card');
+        c.style.cssText = 'display:flex;align-items:center;gap:12px;opacity:' + (open ? 1 : 0.5);
+        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${q.name} ${done ? '<span class="pill jade">已成</span>' : open ? '<span class="pill">可接</span>' : '<span class="pill gray">条件未足</span>'}</h3>
+          <div class="meta">${q.goal}</div><div class="meta">解锁条件：${open ? '已满足' : '好感/胜场/记录未足——多走动、多交谈'}</div></div>`;
+        const b = el('button', 'btn' + (open && !done ? ' btn-primary' : ''), done ? '已成' : '前往');
+        b.style.padding = '7px 13px';
+        if (done || !open) b.disabled = true;
+        else b.onclick = () => { UI.closePanel(); if (World.sceneId !== q.where) World.travel(q.where); setTimeout(() => onQuest(q), 150); };
+        c.appendChild(b);
+        body.appendChild(c);
+      });
+    });
   }
 
   /* ---------- 马刀：约战 / 结算 ---------- */
@@ -8339,6 +8710,11 @@ const Main = (() => {
         if (G.wins >= 30) Engine.award('ach_duel30');
         if (b.stats.usedBlood) Engine.award('ach_bloodwin');
         if (!b.stats.everLeftWall) Engine.award('ach_wallwin');
+        /* 任务：主线/支线完成回流（发赏·解锁·推进） */
+        if (b.cfg.questId) {
+          const q = Quests.byId(b.cfg.questId);
+          if (q && !Quests.done(q.id)) extra += Quests.complete(q);
+        }
         /* 高难试炼首通：追加稀有刀卡 */
         if (b.cfg.trialId && !G.trialDone[b.cfg.trialId]) {
           const t = trialById(b.cfg.trialId);
@@ -8532,6 +8908,7 @@ const Main = (() => {
     UI.updateHUD();
     UI.renderPlaces();
     UI.renderHearsay();
+    Quests.render();
     World.refresh();
     if (Engine.period() === 'eve') { /* 晚自习 ctx 由 updateCtx 处理 */ updateCtx(null); }
     else updateCtx(null);
@@ -8578,7 +8955,14 @@ const Main = (() => {
       || ((World.sceneId === 'classroom6' || World.sceneId === 'classroom7') && (Engine.period() === 'morning' || Engine.period() === 'aft'));
     if (!near && !hasSceneAct) return;
     if (near) bar.classList.remove('hidden');
-    if (near && near.type === 'npc') {
+    if (near && near.type === 'quest') {
+      bar.classList.remove('hidden');
+      const q = near.q;
+      bar.appendChild(el('span', 'ctx-name', (near.main ? '【主线】' : '【支线】') + q.name));
+      const b = el('button', 'ctx-btn duel', '开战 · ' + (q.cfg.enemies || []).map(id => (window.SJI_DATA.CHARACTERS[id] || {}).hao || id).join('·'));
+      b.onclick = () => onQuest(q);
+      bar.appendChild(b);
+    } else if (near && near.type === 'npc') {
       const p = near.p;
       const fav = Engine.favorOf(p.id);
       const head = el('span', 'ctx-name', p.hao || p.name);
@@ -8776,7 +9160,7 @@ const Main = (() => {
   }
 
   function afterAction() {
-    UI.updateHUD(); UI.renderHearsay(); World.refresh(); Save.write();
+    UI.updateHUD(); UI.renderHearsay(); World.refresh(); Quests.render(); Save.write();
   }
 
   /* ---------- 行为 ---------- */
@@ -8904,7 +9288,7 @@ const Main = (() => {
     if (Math.hypot(ev.pos[0] - px, ev.pos[1] - py) > 80) { World.walkTo(ev.pos[0], ev.pos[1] + 30); return; }
     playEvent(ev);
   }
-  function afterDialog() { UI.updateHUD(); UI.renderHearsay(); World.refresh(); Save.write(); }
+  function afterDialog() { UI.updateHUD(); UI.renderHearsay(); World.refresh(); Quests.render(); Save.write(); }
 
   /* ---------- 终章：高考 · 毕业 · AI ---------- */
   function finale() {
@@ -8994,7 +9378,7 @@ const Main = (() => {
     UI.openPanel('系统', body => {
       const row = el('div', '');
       row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px';
-      [['图鉴 · 史中人', () => UI.panelCodex()], ['刀谱 · 马刀行', () => panelBlades()], ['成就', () => UI.panelAch()],
+      [['任务 · 马刀行', () => panelQuests()], ['图鉴 · 史中人', () => UI.panelCodex()], ['刀谱 · 马刀行', () => panelBlades()], ['成就', () => UI.panelAch()],
        ['行囊', () => UI.panelBag()], ['设置 · 存档', () => UI.panelSettings()]].forEach(([t, fn]) => {
         const b = el('button', 'btn', t);
         b.onclick = fn;
@@ -9033,7 +9417,8 @@ const Main = (() => {
 
   return { boot, onNPC, onEvent, afterDialog, updateCtx, onCtxChange,
            challenge, startDuel: p => SJI_UI.startBattle(duelCfg(p)), panelBlades, normalizeG,
-           startTournament, startSurvival, startTrial, panelTrial, trialById };
+           startTournament, startSurvival, startTrial, panelTrial, trialById,
+           onQuest, panelQuests };
 })();
 
 window.addEventListener('DOMContentLoaded', () => Main.boot());

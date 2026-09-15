@@ -9,10 +9,63 @@ const Main = (() => {
     if (!G.blades) G.blades = { cards: [], equip: null, rare: [] };
     if (!G.blades.rare) G.blades.rare = [];
     if (!G.upgrades) G.upgrades = {};
+    if (!G.quests) G.quests = {};
+    if (!G.roster || !G.roster.length) G.roster = ['yinkesi'];
     if (!G.trialDone) G.trialDone = {};
     if (!G.duelDone) G.duelDone = {};
     if (!G.flags) G.flags = {};
     if (G.flags.duelBanDays == null) G.flags.duelBanDays = 0;
+  }
+
+  /* ---------- 任务：接战 / 完成回流 ---------- */
+  function onQuest(q) {
+    if (!q || Dialog.active || window.BATTLE_ACTIVE) return;
+    const pos = [q.pos[0], q.pos[1]];
+    const [px, py] = World.playerPos;
+    if (Math.hypot(pos[0] - px, pos[1] - py) > 90) { World.walkTo(pos[0], pos[1] + 40); return; }
+    const isMain = Quests.current() && Quests.current().id === q.id;
+    Dialog.play([
+      { who: '音克思', text: (isMain ? '【主线】' : '【支线】') + q.name + '——' + q.goal },
+      { who: '音克思', text: '（' + q.hint + '）' },
+      { who: '对手', text: pick(['来呀来呀。', '规则至简，而引人入胜。', '既来之，则战之。', '重开重开，谁怕谁。']) },
+    ], () => Quests.pickAndStart(q));
+  }
+
+  function panelQuests() {
+    UI.openPanel('任务 · 马刀行', body => {
+      const cur = Quests.current();
+      const mul = DIFF_BY_V[Quests.diffV()];
+      body.appendChild(el('div', 'card', `<h3>当前难度：${mul.n} <span class="pill gold">赏格 ×${mul.mul}</span></h3>
+        <div class="meta">${mul.tip}　·　可在「系统 · 设置」中随时更改</div>`));
+      body.appendChild(el('div', 'muted', '<div style="height:10px"></div>主线 · 马刀兴亡史（每节皆高难关卡）：'));
+      Quests.mainList().forEach(q => {
+        const done = Quests.done(q.id); const open = q.need ? q.need() : true;
+        const c = el('div', 'card');
+        c.style.cssText = 'display:flex;align-items:center;gap:12px;opacity:' + (open ? 1 : 0.5);
+        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${q.name} ${done ? '<span class="pill jade">已成</span>' : cur && cur.id === q.id ? '<span class="pill">进行中</span>' : open ? '' : '<span class="pill gray">未接</span>'}</h3>
+          <div class="meta">${q.goal}　·　${q.hint}</div></div>`;
+        const b = el('button', 'btn' + (open && !done ? ' btn-primary' : ''), done ? '已成' : '前往');
+        b.style.padding = '7px 13px';
+        if (done) b.disabled = true;
+        else b.onclick = () => { UI.closePanel(); const sc = SCENE_BY_ID[q.where]; if (World.sceneId !== q.where) World.travel(q.where); setTimeout(() => onQuest(q), 150); };
+        c.appendChild(b);
+        body.appendChild(c);
+      });
+      body.appendChild(el('div', 'muted', '<div style="height:12px"></div>支线 · 满足条件可接（完成即解锁强力人物或永久效果）：'));
+      Quests.sideList().forEach(q => {
+        const done = Quests.done(q.id); const open = q.cond();
+        const c = el('div', 'card');
+        c.style.cssText = 'display:flex;align-items:center;gap:12px;opacity:' + (open ? 1 : 0.5);
+        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${q.name} ${done ? '<span class="pill jade">已成</span>' : open ? '<span class="pill">可接</span>' : '<span class="pill gray">条件未足</span>'}</h3>
+          <div class="meta">${q.goal}</div><div class="meta">解锁条件：${open ? '已满足' : '好感/胜场/记录未足——多走动、多交谈'}</div></div>`;
+        const b = el('button', 'btn' + (open && !done ? ' btn-primary' : ''), done ? '已成' : '前往');
+        b.style.padding = '7px 13px';
+        if (done || !open) b.disabled = true;
+        else b.onclick = () => { UI.closePanel(); if (World.sceneId !== q.where) World.travel(q.where); setTimeout(() => onQuest(q), 150); };
+        c.appendChild(b);
+        body.appendChild(c);
+      });
+    });
   }
 
   /* ---------- 马刀：约战 / 结算 ---------- */
@@ -168,6 +221,11 @@ const Main = (() => {
         if (G.wins >= 30) Engine.award('ach_duel30');
         if (b.stats.usedBlood) Engine.award('ach_bloodwin');
         if (!b.stats.everLeftWall) Engine.award('ach_wallwin');
+        /* 任务：主线/支线完成回流（发赏·解锁·推进） */
+        if (b.cfg.questId) {
+          const q = Quests.byId(b.cfg.questId);
+          if (q && !Quests.done(q.id)) extra += Quests.complete(q);
+        }
         /* 高难试炼首通：追加稀有刀卡 */
         if (b.cfg.trialId && !G.trialDone[b.cfg.trialId]) {
           const t = trialById(b.cfg.trialId);
@@ -361,6 +419,7 @@ const Main = (() => {
     UI.updateHUD();
     UI.renderPlaces();
     UI.renderHearsay();
+    Quests.render();
     World.refresh();
     if (Engine.period() === 'eve') { /* 晚自习 ctx 由 updateCtx 处理 */ updateCtx(null); }
     else updateCtx(null);
@@ -407,7 +466,14 @@ const Main = (() => {
       || ((World.sceneId === 'classroom6' || World.sceneId === 'classroom7') && (Engine.period() === 'morning' || Engine.period() === 'aft'));
     if (!near && !hasSceneAct) return;
     if (near) bar.classList.remove('hidden');
-    if (near && near.type === 'npc') {
+    if (near && near.type === 'quest') {
+      bar.classList.remove('hidden');
+      const q = near.q;
+      bar.appendChild(el('span', 'ctx-name', (near.main ? '【主线】' : '【支线】') + q.name));
+      const b = el('button', 'ctx-btn duel', '开战 · ' + (q.cfg.enemies || []).map(id => (window.SJI_DATA.CHARACTERS[id] || {}).hao || id).join('·'));
+      b.onclick = () => onQuest(q);
+      bar.appendChild(b);
+    } else if (near && near.type === 'npc') {
       const p = near.p;
       const fav = Engine.favorOf(p.id);
       const head = el('span', 'ctx-name', p.hao || p.name);
@@ -605,7 +671,7 @@ const Main = (() => {
   }
 
   function afterAction() {
-    UI.updateHUD(); UI.renderHearsay(); World.refresh(); Save.write();
+    UI.updateHUD(); UI.renderHearsay(); World.refresh(); Quests.render(); Save.write();
   }
 
   /* ---------- 行为 ---------- */
@@ -733,7 +799,7 @@ const Main = (() => {
     if (Math.hypot(ev.pos[0] - px, ev.pos[1] - py) > 80) { World.walkTo(ev.pos[0], ev.pos[1] + 30); return; }
     playEvent(ev);
   }
-  function afterDialog() { UI.updateHUD(); UI.renderHearsay(); World.refresh(); Save.write(); }
+  function afterDialog() { UI.updateHUD(); UI.renderHearsay(); World.refresh(); Quests.render(); Save.write(); }
 
   /* ---------- 终章：高考 · 毕业 · AI ---------- */
   function finale() {
@@ -823,7 +889,7 @@ const Main = (() => {
     UI.openPanel('系统', body => {
       const row = el('div', '');
       row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px';
-      [['图鉴 · 史中人', () => UI.panelCodex()], ['刀谱 · 马刀行', () => panelBlades()], ['成就', () => UI.panelAch()],
+      [['任务 · 马刀行', () => panelQuests()], ['图鉴 · 史中人', () => UI.panelCodex()], ['刀谱 · 马刀行', () => panelBlades()], ['成就', () => UI.panelAch()],
        ['行囊', () => UI.panelBag()], ['设置 · 存档', () => UI.panelSettings()]].forEach(([t, fn]) => {
         const b = el('button', 'btn', t);
         b.onclick = fn;
@@ -862,7 +928,8 @@ const Main = (() => {
 
   return { boot, onNPC, onEvent, afterDialog, updateCtx, onCtxChange,
            challenge, startDuel: p => SJI_UI.startBattle(duelCfg(p)), panelBlades, normalizeG,
-           startTournament, startSurvival, startTrial, panelTrial, trialById };
+           startTournament, startSurvival, startTrial, panelTrial, trialById,
+           onQuest, panelQuests };
 })();
 
 window.addEventListener('DOMContentLoaded', () => Main.boot());

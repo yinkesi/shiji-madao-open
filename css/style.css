@@ -417,6 +417,27 @@ body.theme-night .shard-card { background: #2e2b23; border-color: rgba(255,255,2
 #mg-canvas { border-radius: 22px; box-shadow: var(--shadow-2); max-width: 100vw; max-height: 100vh; }
 #mg-hud { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); padding: 8px 18px; z-index: 72; font-size: 14px; font-weight: 700; }
 
+/* 任务指引卡 */
+#questcard {
+  position: absolute; top: 206px; right: 12px; width: 252px;
+  max-height: 46vh; overflow-y: auto; padding: 11px 13px; z-index: 15; border-radius: 16px;
+}
+#questcard .qc-tag {
+  display: inline-block; font-size: 10.5px; font-weight: 800; letter-spacing: .18em;
+  background: linear-gradient(180deg,#c8523c,var(--cinnabar)); color: #fff8f2;
+  border-radius: 999px; padding: 1px 9px; margin-bottom: 5px;
+}
+#questcard .qc-tag.done { background: var(--jade); }
+#questcard .qc-name { font-family: var(--font-cl); font-size: 15.5px; font-weight: 800; }
+#questcard .qc-goal { font-size: 12.5px; color: var(--ink); line-height: 1.45; margin-top: 3px; }
+#questcard .qc-hint { font-size: 11.5px; color: var(--ink-3); line-height: 1.45; margin-top: 3px; }
+#questcard .qc-btn { margin-top: 8px; font-size: 12px; padding: 6px 12px; }
+#questcard .qc-sides { margin-top: 10px; border-top: 1px dashed rgba(150,130,90,.35); padding-top: 8px; }
+#questcard .qc-sides-title { font-size: 11px; font-weight: 800; letter-spacing: .16em; color: var(--gold); margin-bottom: 5px; }
+#questcard .qc-side { font-size: 11.5px; color: var(--ink-2); line-height: 1.5; margin-bottom: 5px; }
+#questcard .qc-side b { color: var(--ink); }
+#questcard .qc-side .qc-btn { margin-top: 2px; font-size: 11px; padding: 3px 9px; }
+
 /* 减少动效 */
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01s !important; transition-duration: .01s !important; }

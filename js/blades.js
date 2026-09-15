@@ -178,12 +178,15 @@ const Blades = (() => {
     return window.SJI_DATA.CHARACTERS.yinkesi;
   }
 
-  /* 开战前注入段位加成、修炼与稀有刀卡（在 Battle 构造后调用） */
+  /* 开战前注入加成：音克思享段位+修炼，全名册共享稀有刀卡与道具 */
   function applyBoons(battle) {
-    const n = apBonus();
-    for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
-    for (const id of Object.keys(UPGRADE_BOON)) {
-      if ((upgrades()[id] || 0) > 0) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === UPGRADE_BOON[id]));
+    const asLead = !battle.player.charId || battle.player.charId === 'yinkesi';
+    if (asLead) {
+      const n = apBonus();
+      for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
+      for (const id of Object.keys(UPGRADE_BOON)) {
+        if ((upgrades()[id] || 0) > 0) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === UPGRADE_BOON[id]));
+      }
     }
     for (const bid of rareList()) {
       const boon = window.SJI_DATA.BOONS.find(b => b.id === bid);

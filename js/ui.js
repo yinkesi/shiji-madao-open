@@ -253,6 +253,17 @@ const UI = (() => {
       };
       mk('音效', [{ t:'开', v:false }, { t:'静音', v:true }], G.settings.muted, v => { G.settings.muted = v; });
       mk('打字速度', [{ t:'从容', v:1 }, { t:'风驰', v:2 }], G.settings.speed, v => { G.settings.speed = v; });
+      /* 难度自选：写入战斗层设置，直接影响所有对决/试炼/任务的敌方强度与赏格 */
+      if (window.DIFFS && window.SJI_SAVE) {
+        mk('马刀难度', DIFFS.map(d => ({ t: d.n, v: d.v })), Quests.diffV(), v => {
+          SJI_SAVE.setSetting('lastDiff', v);
+          const d = DIFF_BY_V[v];
+          toast(`难度改为「${d.n}」：${d.tip}`, '刀');
+          Save.write();
+        });
+        const dv = DIFF_BY_V[Quests.diffV()];
+        body.appendChild(el('div', 'muted', `当前：${dv.n} —— ${dv.tip}。难度只改敌方强度与赏格，不改剧情。`));
+      }
       body.appendChild(el('div', '', '<div style="height:14px"></div>'));
       const ex = el('div', 'card');
       ex.innerHTML = '<h3>导出存档</h3><div class="meta" style="margin-bottom:8px">换设备或清缓存前，把这串文字保存好。</div>';
