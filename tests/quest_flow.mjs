@@ -1,5 +1,6 @@
-/* 临时探针：验证剧情重构基础链路（择难度 → 开局即主线 → 打完推进 → 歇一日）
-   用法：NODE_PATH=<node_modules> node tests/probe_flow.mjs */
+/* 剧情链路测试：验证剧情重构基础链路
+   （择难度 → 开局即主线 → 赏格随难度 → 章节映射链 → 歇一日 → 立传解耦 → 支线解锁 → 点将出征 → 任务点错位）
+   用法：NODE_PATH=<装有 playwright 的 node_modules> node tests/quest_flow.mjs */
 import { chromium } from 'playwright';
 import { pathToFileURL } from 'url';
 import path from 'path';
@@ -220,6 +221,6 @@ await page.waitForTimeout(900);
 check('支线后回到校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));
 
 console.log(errors.length ? '\n页面错误:\n' + errors.join('\n') : '\n无页面错误');
-console.log(fails === 0 ? '\n=== 探针 ALL PASS ===' : `\n!! ${fails} 项失败`);
+console.log(fails === 0 ? '\n=== 剧情链路 ALL PASS ===' : `\n!! ${fails} 项失败`);
 await browser.close();
 process.exit(errors.length ? 1 : fails);
