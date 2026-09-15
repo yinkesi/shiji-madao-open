@@ -154,8 +154,21 @@ const Dialog = (() => {
     setTimeout(cleanup, 320);
   }
 
+  /* 强制收尾：任何残留对话（如战后幕在结算画面下弹出、剧情回调中断遗留）
+     都会卡住 Dialog.active，令约战/任务入口静默失效——此函数幂等地清理现场。 */
+  function forceFinish() {
+    if (!active) return;
+    active = false;
+    if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
+    typing = false; steps = []; idx = 0; onDone = null; stepOver = null;
+    root.classList.add('hidden'); cast.innerHTML = ''; figs = {};
+    box.style.transform = ''; box.style.opacity = '';
+    choicesEl.innerHTML = ''; nextBtn.style.visibility = 'visible';
+  }
+
   return {
     get active() { return active; },
+    forceFinish,
     play(script, done) {
       steps = script.slice(); idx = 0; onDone = done || null; active = true;
       cast.innerHTML = ''; figs = {};

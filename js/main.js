@@ -28,7 +28,8 @@ const Main = (() => {
 
   /* ---------- 任务：接战 / 完成回流 ---------- */
   function onQuest(q) {
-    if (!q || Dialog.active || window.BATTLE_ACTIVE) return;
+    if (!q || window.BATTLE_ACTIVE) return;
+    if (Dialog.active) Dialog.forceFinish();   // 清掉残留对话（战后幕等）
     /* 任务点可能因同场景重叠而错位显示，取显示位置走近 */
     const onMap = Quests.markers().some(m => m.q.id === q.id);
     const pos = onMap ? Quests.walkPosOf(q.id) : [q.pos[0], q.pos[1]];
@@ -162,7 +163,8 @@ const Main = (() => {
   }
 
   function challenge(p) {
-    if (Dialog.active || MG.active || (window.BATTLE_ACTIVE)) return;
+    if (MG.active || (window.BATTLE_ACTIVE)) return;
+    if (Dialog.active) Dialog.forceFinish();   // 清掉残留对话（战后幕等），不再静默失效
     const pos = World.npcPos(p.id);
     if (pos) {
       const [px, py] = World.playerPos;
