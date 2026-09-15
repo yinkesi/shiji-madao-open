@@ -101,29 +101,75 @@ const Quests = (() => {
       reward: { rare: 'b_horse', money: 25, text: '稀有刀卡「马踏连营」入手' } },
   ];
 
+  /* ============ 主线完成度 → 章节进度 ============
+     旧内容（协会开张、刀禁期、试炼解锁、番外人物客串）此前都挂在 G.ch 上。
+     现在 G.ch 不再靠睡觉推进，而由主线进度翻译而来，于是「打完这一节，世界就变了一道」。
+        m4 世界马刀协会 → ch≥8（协会/试炼/生存开）
+        m6 刀禁令风波   → ch≥12（刀禁期起）
+        m9 马刀的结局   → ch16（终章） */
+  const CH_AFTER = { m1: 1, m2: 3, m3: 5, m4: 8, m5: 9, m6: 12, m7: 13, m8: 14, m9: 16 };
+
   const Q = {
     all() { return MAIN.concat(SIDE); },
     mainList() { return MAIN.slice(); },
     sideList() { return SIDE.slice(); },
     byId(id) { return this.all().find(q => q.id === id); },
     done(id) { return !!G.quests[id]; },
+    /* 主线进度 → 章节号 */
+    chapterNow() {
+      let ch = 0;
+      MAIN.forEach(q => { if (this.done(q.id) && CH_AFTER[q.id] != null) ch = Math.max(ch, CH_AFTER[q.id]); });
+      return ch;
+    },
+    /* HUD 用：主线 n/9 + 支线已办 m/7 */
+    progressLabel() {
+      return MAIN.filter(q => this.done(q.id)).length + '/' + MAIN.length;
+    },
+    sideDoneLabel() {
+      return SIDE.filter(q => this.done(q.id)).length + '/' + SIDE.length;
+    },
     /* 当前主线：第一个未完成的主线 */
     current() { return MAIN.find(q => !this.done(q.id)) || null; },
     /* 可接支线：条件满足且未完成 */
     sideOpen() { return SIDE.filter(q => !this.done(q.id) && q.cond()); },
-    /* 世界上此刻该显示的任务点（主线当前 + 已解锁支线） */
+    /* 世界上此刻该显示的任务点（主线当前 + 已解锁支线）
+       dpos = 显示/交互位置；q.pos 仍是寻路用的锚点。同场景重叠时扇形错开。 */
     markers() {
       const cur = this.current();
       const list = [];
       if (cur) list.push({ q: cur, main: true });
       this.sideOpen().forEach(q => list.push({ q, main: false }));
+      /* 聚类后错位：距离 <70 的点视为一团，按扇形摊开（左右各展开约 42px） */
+      const byScene = {};
+      list.forEach(m => { (byScene[m.q.where] = byScene[m.q.where] || []).push(m); });
+      Object.keys(byScene).forEach(sid => {
+        const arr = byScene[sid];
+        const groups = [];
+        arr.forEach(m => {
+          const g = groups.find(g => Math.hypot(g[0].q.pos[0] - m.q.pos[0], g[0].q.pos[1] - m.q.pos[1]) < 70);
+          if (g) g.push(m); else groups.push([m]);
+        });
+        groups.forEach(g => {
+          g.forEach((m, i) => {
+            if (g.length < 2) { m.dpos = m.q.pos.slice(); return; }
+            const ang = -Math.PI / 2 + (i - (g.length - 1) / 2) * 0.9;
+            m.dpos = [Math.round(m.q.pos[0] + Math.cos(ang) * 96), Math.round(m.q.pos[1] + Math.sin(ang) * 34)];
+          });
+        });
+      });
+      list.forEach(m => { if (!m.dpos) m.dpos = m.q.pos.slice(); });
       return list;
+    },
+    /* 某任务点的显示位置（有错位则用错位后） */
+    walkPosOf(id) {
+      const m = this.markers().find(m => m.q.id === id);
+      return m ? m.dpos.slice() : [0, 0];
     },
     /* 玩家附近的任务点（供交互条） */
     nearMarker(sceneId, x, y, r) {
       r = r || 100;
       return this.markers().filter(m => m.q.where === sceneId)
-        .map(m => ({ m, d: Math.hypot(m.q.pos[0] - x, m.q.pos[1] - y) }))
+        .map(m => ({ m, d: Math.hypot(m.dpos[0] - x, m.dpos[1] - y) }))
         .filter(o => o.d < r).sort((a, b) => a.d - b.d)[0] || null;
     },
     /* 开战：难度自选 + 出战角色选择 → SJI_UI.startBattle */
@@ -181,9 +227,12 @@ const Quests = (() => {
       if (rw.text) lines.push(`<div class="yueks">${rw.text}</div>`);
       G.quests[q.id] = true;
       Engine.award('ach_quest');
+      /* 主线完成 → 章节推进（世界随之变化：协会开张 / 刀禁期 / 试炼解锁） */
+      const chAdvanced = Engine.syncChapter();
       const cur = this.current();
       if (cur) lines.push(`<div style="margin-top:6px">▸ 新任务：「${cur.name}」——${cur.hint}</div>`);
-      else if (!rw.text || true) lines.push(`<div style="margin-top:6px" class="yueks">音克思曰：刀者，终将入书。全书将成。</div>`);
+      else lines.push(`<div style="margin-top:6px" class="yueks">音克思曰：刀者，终将入书。全书将成。</div>`);
+      if (chAdvanced) lines.push(`<div class="yueks">刀史又进一道——世界随之一变。</div>`);
       Save.write();
       this.render();
       return '<div class="result-extra">' + lines.join('') + '</div>';
@@ -209,20 +258,22 @@ const Quests = (() => {
       if (!box) return;
       const cur = this.current();
       const sides = this.sideOpen();
+      const prog = this.progressLabel();
       let h = '';
       if (cur) {
         const sc = SCENE_BY_ID[cur.where];
-        h += `<div class="qc-main"><div class="qc-tag">主线</div>
+        h += `<div class="qc-main"><div class="qc-tag">主线 ${prog}</div>
           <div class="qc-name">${cur.name}</div>
           <div class="qc-goal">${cur.goal}</div>
           <div class="qc-hint">${cur.hint}</div>
           <button class="ctx-btn duel qc-btn" data-quests="${cur.id}">前往 · ${sc ? sc.short : cur.where}</button></div>`;
       } else {
-        h += `<div class="qc-main"><div class="qc-tag done">主线已成</div><div class="qc-name">刀史收卷</div>
-          <div class="qc-goal">纵刀已封，书已成。校园仍可自由来去。</div></div>`;
+        h += `<div class="qc-main"><div class="qc-tag done">主线 ${prog} · 已成</div><div class="qc-name">刀史收卷</div>
+          <div class="qc-goal">纵刀已封，书已成。校园仍可自由来去。</div>
+          <button class="ctx-btn duel qc-btn" data-finale="1">终章 · 高考</button></div>`;
       }
       if (sides.length) {
-        h += `<div class="qc-sides"><div class="qc-sides-title">支线可接（${sides.length}）</div>` +
+        h += `<div class="qc-sides"><div class="qc-sides-title">支线可接（${sides.length}）· 已办 ${this.sideDoneLabel()}</div>` +
           sides.slice(0, 3).map(q => {
             const sc = SCENE_BY_ID[q.where];
             return `<div class="qc-side"><b>${q.name}</b> · ${sc ? sc.short : q.where}
@@ -237,8 +288,17 @@ const Quests = (() => {
           const q = Quests.byId(b.dataset.quests);
           if (!q) return;
           if (World.sceneId !== q.where) World.travel(q.where);
-          setTimeout(() => World.walkTo(q.pos[0], q.pos[1] + 40), 120);
+          setTimeout(() => {
+            const p = Quests.walkPosOf(q.id);
+            World.walkTo(p[0], p[1] + 40);
+          }, 120);
           toast(`前往：${q.goal}`, '令');
+        };
+      });
+      box.querySelectorAll('[data-finale]').forEach(b => {
+        b.onclick = (e) => {
+          e.stopPropagation();
+          if (typeof Main !== 'undefined' && Main.finale) Main.finale();
         };
       });
     },

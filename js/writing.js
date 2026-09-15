@@ -179,25 +179,23 @@ const Writing = (() => {
     return SLOT_KEYS.map(k => SHARDS[placed[k]] ? SHARDS[placed[k]].name : '').filter(Boolean).join(' / ');
   }
 
-  function duelReady(no) {
+  /* 立传已与主线解耦：不再需要先胜传主（原「成传之战」门禁撤下）。
+     保留下方 duelReady / duelWon 两个函数，供面板作「可切磋」的软提示。 */
+  function duelReady() { return true; }
+  function duelWon(no) {
     const v = VOL_BY_NO[no];
     return !v.duel || (typeof Blades !== 'undefined' && Blades.hasCard(v.duel));
   }
 
   return {
     open(no) {
-      const v = VOL_BY_NO[no];
-      if (!duelReady(no)) {
-        const ch = window.SJI_DATA.CHARACTERS[v.duel];
-        toast(`未与传主一战，无以为传——先在马刀场上胜过「${ch ? ch.hao : v.duel}」`, '刀');
-        return;
-      }
       volNo = no;
       placed = { qi: null, cheng: null, zhuan: null, he: null };
       style = '直';
       render();
     },
     duelReady,
+    duelWon,
     openPublished(no) { UI.viewVol(no); },
   };
 })();

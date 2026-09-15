@@ -197,7 +197,7 @@ const Blades = (() => {
       const boon = window.SJI_DATA.BOONS.find(b => b.id === BATTLE_ITEMS[itemId].boon);
       if (boon) battle._applyBoon(battle.player, boon);
       G.flags.duelItem = null;
-      if (window.Save) Save.write();
+      if (typeof Save !== 'undefined') Save.write();
     }
   }
 

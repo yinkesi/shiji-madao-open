@@ -127,7 +127,7 @@ const World = (() => {
       if (ev.cast.includes(p.id)) return { scene: ev.scene, pos: ev.pos.slice(), busy: true };
     }
     const per = Engine.period();
-    if (G.ch === 15 && PEOPLE_WAI.some(w => w.id === p.id)) return { scene: 'gate', pos: [700, 300] };
+    if (G.ch >= 15 && PEOPLE_WAI.some(w => w.id === p.id)) return { scene: 'gate', pos: [700, 300] };
     if (p.role === 'p') return { scene: 'office', pos: SCENE_BY_ID.office.spots.of_head };
     if (p.role === 't') {
       if ((per === 'morning' || per === 'aft') && p.cls === '6' && p.id !== 'hanxiao')
@@ -291,17 +291,18 @@ const World = (() => {
     if (typeof Quests !== 'undefined') {
       Quests.markers().forEach(mk => {
         if (mk.q.where !== sceneId) return;
-        const bob = Math.sin(now / 320 + mk.q.pos[1]) * 4;
+        const mp = mk.dpos || mk.q.pos;
+        const bob = Math.sin(now / 320 + mp[1]) * 4;
         const col = mk.main ? '#a8842c' : '#3e7a5e';
         ctx.fillStyle = col;
-        ctx.beginPath(); ctx.arc(mk.q.pos[0], mk.q.pos[1] - 52 + bob, 14, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.arc(mp[0], mp[1] - 52 + bob, 14, 0, 7); ctx.fill();
         ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(mk.q.pos[0], mk.q.pos[1] - 52 + bob, 14, 0, 7); ctx.stroke();
+        ctx.beginPath(); ctx.arc(mp[0], mp[1] - 52 + bob, 14, 0, 7); ctx.stroke();
         ctx.fillStyle = '#fff'; ctx.font = 'bold 16px serif'; ctx.textAlign = 'center';
-        ctx.fillText(mk.main ? '令' : '刀', mk.q.pos[0], mk.q.pos[1] - 46 + bob);
-        ctx.fillStyle = 'rgba(40,30,20,.78)'; roundRect(ctx, mk.q.pos[0] - 46, mk.q.pos[1] - 32, 92, 20, 10); ctx.fill();
+        ctx.fillText(mk.main ? '令' : '刀', mp[0], mp[1] - 46 + bob);
+        ctx.fillStyle = 'rgba(40,30,20,.78)'; roundRect(ctx, mp[0] - 46, mp[1] - 32, 92, 20, 10); ctx.fill();
         ctx.fillStyle = '#f3efe4'; ctx.font = '11px sans-serif';
-        ctx.fillText(mk.q.name, mk.q.pos[0], mk.q.pos[1] - 18);
+        ctx.fillText(mk.q.name, mp[0], mp[1] - 18);
       });
     }
     // NPC
@@ -413,7 +414,11 @@ const World = (() => {
     if (ev) { Main.onEvent(ev); return; }
     // 任务标记
     if (typeof Quests !== 'undefined') {
-      const mk = Quests.markers().find(mk => mk.q.where === sceneId && Math.hypot(w.x - mk.q.pos[0], w.y - mk.q.pos[1] + 26) < 46);
+      const mk = Quests.markers().find(mk => {
+        if (mk.q.where !== sceneId) return false;
+        const mp = mk.dpos || mk.q.pos;
+        return Math.hypot(w.x - mp[0], w.y - mp[1] + 26) < 46;
+      });
       if (mk) { Main.onQuest(mk.q); return; }
     }
     // NPC

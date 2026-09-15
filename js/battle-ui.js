@@ -72,7 +72,8 @@ window.SJI_UI = (function () {
     const cid = SHORTHAND[who] || who;
     const ch = D.CHARACTERS[cid];
     if (ch) return { name: ch.name, hao: ch.hao, glyph: ch.glyph, color: ch.color };
-    const p = (window.PEOPLE_BY_ID && PEOPLE_BY_ID[who]) || (window.MINOR_FIGS && MINOR_FIGS[who]);
+    const p = (typeof PEOPLE_BY_ID !== 'undefined' && PEOPLE_BY_ID[who])
+      || (typeof MINOR_FIGS !== 'undefined' && MINOR_FIGS[who]);
     if (p) {
       let h = 0; for (const c of (p.id || who)) h = (h * 31 + c.charCodeAt(0)) & 0xffff;
       const glyph = (p.hao || p.name || who)[0];

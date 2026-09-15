@@ -82,7 +82,7 @@ const Sfx = (() => {
   let ctx = null;
   function ac() { if (!ctx) { try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} } return ctx; }
   function tone(f, dur, type, vol, delay) {
-    if (!window.G || G.muted) return;
+    if (!window.G || !G.settings || G.settings.muted) return;
     const c = ac(); if (!c) return;
     const t0 = c.currentTime + (delay || 0);
     const o = c.createOscillator(), g = c.createGain();

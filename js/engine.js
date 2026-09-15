@@ -1,13 +1,16 @@
-/* 实验史记·春秋笔 —— 引擎：状态 / 时间 / 行动 / 事件 / 成就 */
+/* 实验史记·马刀行 —— 引擎：状态 / 进度 / 事件 / 成就
+   自由开放世界：没有「章节靠睡觉推进」的时间线。章节（G.ch）由主线完成度驱动，
+   时段与行动点退化为氛围与风味，不再门控任何玩法。 */
 'use strict';
 
+/* 时段仅作氛围与 NPC 调度参考（世界不按课表走） */
 const PERIODS = ['morning', 'noon', 'aft', 'eve'];
-const PERIOD_LABEL = { morning:'上午 · 课上', noon:'午休', aft:'下午 · 课上', eve:'晚自习' };
+const PERIOD_LABEL = { morning:'上午', noon:'午间', aft:'下午', eve:'夜间' };
 const PERIOD_THEME = { morning:'theme-morning', noon:'theme-day', aft:'theme-day', eve:'theme-night' };
 
 function newGameState() {
   return {
-    ver: 1,
+    ver: 2,
     ch: 0, day: 1, periodIdx: 0,
     ap: 3, apMax: 3,
     wen: 5, rep: 50, money: 12,
@@ -18,11 +21,11 @@ function newGameState() {
     giftToday: {}, chatCount: 0, caughtToday: false,
     bag: { snack:1, candy:2, note:1 },
     ach: {},
-    flags: { visitedScenes:['library'], metPeople:[], prologue:false, duelBanDays:0 },
+    flags: { visitedScenes:['playground'], metPeople:[], prologue:false, duelBanDays:0 },
     wins: 0, duelsLost: 0,
     blades: { cards: [], equip: null, rare: [] },   // 刀谱：击败者 id → 录技；rare → 试炼稀有刀卡
     upgrades: {},            // 修炼等级：hp/knife/horse/dodge/regen/cd/ap
-    quests: {},              // 任务完成记录
+    quests: {},              // 任务完成记录（主线 9 节 + 支线 7 条）
     roster: ['yinkesi'],     // 出战名册（支线解锁强力人物）
     trialDone: {},           // 试炼首通记录
     duelDone: {},            // duelId -> true（成传战/支线战斗去重）
@@ -35,61 +38,57 @@ function newGameState() {
 window.G = null;
 
 const Engine = {
-  /* ---------- 时间 ---------- */
-  chDef() { return CHAPTERS[G.ch]; },
-  period() { return PERIODS[G.periodIdx]; },
-  dateLabel() {
-    const c = CHAPTERS[G.ch];
-    return `${c.date} · 第${'一二三四五六日'[G.day - 1]}天`;
+  /* ---------- 进度（章节 ↔ 主线） ---------- */
+  chDef() { return CHAPTERS[G.ch] || CHAPTERS[0]; },
+  period() { return PERIODS[G.periodIdx] || 'morning'; },
+  dateLabel() { const c = this.chDef(); return `${c.date} · 第 ${G.day} 日`; },
+  chLabel() { return this.chDef().title; },
+  /** 章节由主线完成度推导；只进不退（老档原进度保留） */
+  syncChapter() {
+    if (typeof Quests === 'undefined') return false;
+    const want = Quests.chapterNow();
+    if (want > G.ch) { G.ch = want; this.pendingCh = G.ch; this.syncWorldFlags(); return true; }
+    return false;
   },
-  /** 当前时点活跃且未完成的事件 */
+  /** 章节达标即解锁对应世界内容（不再依赖某条史料去开门） */
+  syncWorldFlags() {
+    if (G.ch >= 8) G.flags.xiehui = true;   // 世界马刀协会开张（m4 后）
+  },
+  takePendingChapter() { const c = this.pendingCh; this.pendingCh = null; return c == null ? null : c; },
+  pendingCh: null,
+  /** 仅供测试/调试：直接推进章节号（正式流程由 syncChapter 按主线驱动） */
+  nextChapter() {
+    if (G.ch >= CHAPTERS.length - 1) return 'finale-ready';
+    G.ch++; Save.write(); return 'ok';
+  },
+
+  /* ---------- 事件：不再按时段/日期门控，本章之事皆可亲历 ---------- */
   eventsNow() {
-    return EVENTS.filter(e => e.ch === G.ch
-      && (Array.isArray(e.day) ? e.day.includes(G.day) : e.day === G.day)
-      && (e.periods.includes(this.period()) || G.periodIdx === 3)
-      && !G.doneEvents.includes(e.id));
+    return EVENTS.filter(e => e.ch === G.ch && !G.doneEvents.includes(e.id));
   },
-  /** 今天（含未来时段）未完成的事件，供风闻板 */
-  eventsToday() {
-    return EVENTS.filter(e => e.ch === G.ch
-      && (Array.isArray(e.day) ? e.day.includes(G.day) : e.day === G.day)
-      && !G.doneEvents.includes(e.id));
-  },
-  /** 已过期（本章节内没赶上）且未收集的史料 → 可打听 */
+  /** 供「今日风闻」板 */
+  eventsToday() { return this.eventsNow(); },
+  /** 已走过的章节里没赶上、且未收集的史料 → 可托人打听 */
   missedEvents() {
-    return EVENTS.filter(e => e.shard && !G.shards[e.shard] && !G.doneEvents.includes(e.id)
-      && (e.ch < G.ch || (e.ch === G.ch && e.day < G.day)));
+    return EVENTS.filter(e => e.shard && !G.shards[e.shard] && !G.doneEvents.includes(e.id) && e.ch < G.ch);
   },
-  advancePeriod() {
-    if (G.periodIdx < 3) { G.periodIdx++; return 'period'; }
-    return 'eve'; // 调用方打开晚自习菜单
-  },
+  /** 歇一日：日子推进，时段随机轮换（纯氛围） */
   nextDay() {
-    G.day++; G.periodIdx = 0; G.ap = G.apMax + (G.flags.rested ? 1 : 0) - (G.flags.fineTomorrow ? 1 : 0);
-    G.flags.rested = false;
-    if (G.flags.fineTomorrow) { toast('昨日罚站，今日行动点 -1', '恶'); G.flags.fineTomorrow = false; }
+    G.day++;
+    G.periodIdx = Math.floor(Math.random() * 4);
+    G.giftToday = {}; G.chatCount = 0; G.caughtToday = false;
+    G.money += 3; // 每日生活费
+    G.flags.fineTomorrow = false;
     if (G.flags.duelBanDays > 0) {
       G.flags.duelBanDays--;
       if (G.flags.duelBanDays === 0) toast('钦法还刀：马刀失而复得，可约战矣', '刀');
     }
-    G.giftToday = {}; G.chatCount = 0; G.caughtToday = false;
-    G.money += 3; // 每日生活费
-    if (G.day > this.chDef().days) { return 'chapter-end'; }
     Save.write(); return 'newday';
-  },
-  nextChapter() {
-    if (G.ch >= CHAPTERS.length - 1) return 'finale-ready';
-    G.ch++; G.day = 1; G.periodIdx = 0; G.ap = G.apMax;
-    G.doneEvents = G.doneEvents.filter(id => EVENT_BY_ID[id] && EVENT_BY_ID[id].ch === G.ch); // 保留本章节（防止重复）
-    Save.write(); return 'ok';
   },
 
   /* ---------- 资源 ---------- */
-  spendAP(n) {
-    n = n || 1;
-    if (G.ap < n) { toast('行动点不足，晚自习前只有 ' + G.ap + ' 点'); return false; }
-    G.ap -= n; UI.bump('ap'); Save.write(); return true;
-  },
+  /** 自由开放世界：行动点不再是探索门禁。保留接口以免改动所有调用点。 */
+  spendAP() { return true; },
   addWen(n) { G.wen = clamp(G.wen + n, 0, 100); UI.bump('wen'); },
   addRep(n) { G.rep = clamp(G.rep + n, 0, 100); UI.bump('rep'); },
   addMoney(n) {
@@ -118,13 +117,12 @@ const Engine = {
     return true;
   },
 
-  /* ---------- 风险：被逮 ---------- */
-  /** 课上时段在教室外行动，可能被巡查。返回是否触发了巡查 */
+  /* ---------- 风险：被逮（自由世界：只与地点有关，不再限时段） ---------- */
+  /** 在教学楼内行动，偶遇巡查。返回是否触发了巡查 */
   riskCheck() {
     if (G.caughtToday) return false;
-    if (G.periodIdx !== 0 && G.periodIdx !== 2) return false; // 只在上午/下午
-    if (World.sceneId === 'classroom6' || World.sceneId === 'classroom7') return false;
-    if (Math.random() > 0.14) return false;
+    if (!['corridor', 'classroom6', 'classroom7', 'office'].includes(World.sceneId)) return false;
+    if (Math.random() > 0.09) return false;
     G.caughtToday = true;
     return true;
   },

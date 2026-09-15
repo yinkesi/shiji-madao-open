@@ -15,12 +15,21 @@ const Main = (() => {
     if (!G.duelDone) G.duelDone = {};
     if (!G.flags) G.flags = {};
     if (G.flags.duelBanDays == null) G.flags.duelBanDays = 0;
+    if (G.day == null) G.day = 1;
+    if (G.periodIdx == null) G.periodIdx = 0;
+    /* 老档（有章节进度、但从未接触任务系统）→ 主线九节从头接起，此前进度保留 */
+    if (!Object.keys(G.quests).length && G.ch > 0) G.flags.legacyMigrated = true;
+    /* 章节达标即解锁世界内容（协会/试炼/生存），老档与新档一视同仁 */
+    Engine.syncChapter();
+    Engine.syncWorldFlags();
   }
 
   /* ---------- 任务：接战 / 完成回流 ---------- */
   function onQuest(q) {
     if (!q || Dialog.active || window.BATTLE_ACTIVE) return;
-    const pos = [q.pos[0], q.pos[1]];
+    /* 任务点可能因同场景重叠而错位显示，取显示位置走近 */
+    const onMap = Quests.markers().some(m => m.q.id === q.id);
+    const pos = onMap ? Quests.walkPosOf(q.id) : [q.pos[0], q.pos[1]];
     const [px, py] = World.playerPos;
     if (Math.hypot(pos[0] - px, pos[1] - py) > 90) { World.walkTo(pos[0], pos[1] + 40); return; }
     const isMain = Quests.current() && Quests.current().id === q.id;
@@ -268,6 +277,13 @@ const Main = (() => {
     onDone() {
       afterAction();
       World.refresh();
+      /* 主线推进带来的章节变化 → 回世界后弹一道里程碑卡 */
+      const ch = Engine.takePendingChapter();
+      if (ch != null && CHAPTERS[ch]) {
+        showChapterCard(CHAPTERS[ch], () => {
+          UI.updateHUD(); UI.renderHearsay(); Quests.render();
+        });
+      }
     },
   };
 
@@ -337,8 +353,37 @@ const Main = (() => {
   }
 
   /* ---------- 标题页 ---------- */
+  /* 开卷前先择难度：主线皆高难关卡，难度只改敌方强度与赏格，不改剧情 */
+  function pickDifficulty() {
+    const cur = Quests.diffV();
+    UI.openPanel('择难度 · 新的史官', body => {
+      body.appendChild(el('div', 'muted', '主线皆高难关卡。难度只改敌方强度与赏格，不改剧情；开卷后仍可在「系统 · 设置」随时更改。'));
+      body.appendChild(el('div', '', '<div style="height:10px"></div>'));
+      DIFFS.forEach(d => {
+        const c = el('div', 'card');
+        c.style.cssText = 'display:flex;align-items:center;gap:12px;cursor:pointer';
+        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${d.n}<span class="pill ${d.v === cur ? 'gold' : 'gray'}" style="margin-left:8px">赏格 ×${d.mul}</span></h3>
+          <div class="meta">${d.tip}</div></div>`;
+        const b = el('button', 'btn' + (d.v === cur ? ' btn-primary' : ''), d.v === cur ? '按此开卷' : '选此');
+        b.style.padding = '8px 16px';
+        b.onclick = e => { e.stopPropagation(); beginNewGame(d.v); };
+        c.appendChild(b);
+        c.onclick = () => beginNewGame(d.v);
+        body.appendChild(c);
+      });
+      body.appendChild(el('div', 'muted', '<div style="height:12px"></div>开卷后：世界自由来去；主线指引在右侧任务卡；走近「令」标记即可开战。'));
+    });
+  }
+  function beginNewGame(diffV) {
+    if (window.SJI_SAVE && SJI_SAVE.setSetting) SJI_SAVE.setSetting('lastDiff', diffV);
+    UI.closePanel();
+    Sfx.tap();
+    G = newGameState(); normalizeG(); Engine.award('ach_start'); Save.write();
+    startChapter(true);
+  }
+
   function bindTitle() {
-    $('#btn-new').onclick = () => { Sfx.tap(); G = newGameState(); normalizeG(); Save.write(); startChapter(true); };
+    $('#btn-new').onclick = () => { Sfx.tap(); pickDifficulty(); };
     $('#btn-continue').onclick = () => {
       const s = Save.read();
       if (!s) { toast('还没有存档'); return; }
@@ -346,9 +391,13 @@ const Main = (() => {
       $('#screen-title').classList.add('hidden');
       $('#screen-game').classList.remove('hidden');
       UI.updateHUD();
-      World.enter(G.flags.lastScene || 'corridor');
+      World.enter(G.flags.lastScene || 'playground');
       enterPeriod(false);
       toast('继续上局', '史');
+      if (G.flags.legacyMigrated) {
+        G.flags.legacyMigrated = false; Save.write();
+        setTimeout(() => toast('旧档已并入刀史：主线九节从头接起，此前的胜场、刀谱与进度皆保留', '迁'), 900);
+      }
     };
     $('#btn-import-title').onclick = () => {
       UI.openPanel('导入存档', body => {
@@ -386,63 +435,71 @@ const Main = (() => {
   }
 
   function startChapter(isNew) {
-    const def = CHAPTERS[G.ch];
+    const def = CHAPTERS[G.ch] || CHAPTERS[0];
     $('#screen-title').classList.add('hidden');
     $('#screen-game').classList.remove('hidden');
     UI.updateHUD();
+    /* 新档不再走「序章转场卡」——开局即主线：直接落到主线首节所在地，并给指引 */
+    if (isNew) {
+      World.enter('playground');
+      UI.renderPlaces(); UI.renderHearsay(); Quests.render();
+      prologue();
+      return;
+    }
     showChapterCard(def, () => {
-      const scene = def.scene || (G.ch === 15 ? 'gate' : 'corridor');
-      World.enter(scene);
-      if (isNew && G.ch === 0) prologue();
-      else enterPeriod(true);
+      World.enter(G.flags.lastScene || def.scene || 'corridor');
+      enterPeriod(true);
     });
-  }
-
-  function nextChapter() {
-    if (G.ch >= CHAPTERS.length - 1) { finale(); return; }
-    const toFinale = G.ch + 1 === CHAPTERS.length - 1; // 下一章即终章
-    Engine.nextChapter();
-    if (toFinale) { finale(); return; }
-    startChapter(false);
   }
 
   /* ---------- 序章 ---------- */
   function prologue() {
-    enterPeriod(true);
-    toast('点击地面移动 · 走近带「记」的名场面旁观', '引');
-    setTimeout(() => toast('走近会马刀的人，可「来呀来呀」约战——胜则录技入刀谱', '刀'), 1800);
-    setTimeout(() => toast('右上「史记」随时翻阅卷目 · 「刀」字随时查看刀谱', '引'), 3600);
+    toast('点击地面移动 · 走近带「令」的标记，接主线', '引');
+    setTimeout(() => toast('右侧任务卡写有当前主线与可接支线 · 点「前往」直达', '令'), 1600);
+    setTimeout(() => toast('想动手随时走近任何人：「来呀来呀」约战，胜则录技入刀谱', '刀'), 3400);
+    setTimeout(() => toast('世界自由来去，没有时段门禁 · 底部「歇一日」推进日子', '游'), 5200);
+    Save.write();
   }
 
-  /* ---------- 时段流转 ---------- */
+  /* ---------- 日子流转（自由世界：随时可歇，不再是「下一时段」） ---------- */
   function enterPeriod(changed) {
     UI.updateHUD();
     UI.renderPlaces();
     UI.renderHearsay();
     Quests.render();
     World.refresh();
-    if (Engine.period() === 'eve') { /* 晚自习 ctx 由 updateCtx 处理 */ updateCtx(null); }
-    else updateCtx(null);
-    if (changed && Engine.period() === 'morning') toast(`${Engine.dateLabel()} · 早读铃响`, '晨');
+    updateCtx(null);
+    if (changed) toast(Engine.dateLabel(), '日');
   }
-  function advancePeriod() {
-    if (Dialog.active || MG.active || UI.panelOpen) return;
-    const r = Engine.advancePeriod();
-    if (r === 'period') { enterPeriod(true); Sfx.page(); }
-    else if (r === 'eve') { enterPeriod(true); toast('晚自习——一日所获，可入史册', '夜'); Sfx.page(); }
-  }
-  function sleep() {
-    if (Dialog.active || MG.active) return;
-    const r = Engine.nextDay();
-    if (r === 'chapter-end') {
-      if (G.ch === 0) { Engine.award('ach_start'); }
-      nextChapter();
-    } else if (G.ch === CHAPTERS.length - 1 && G.day > CHAPTERS[G.ch].days) {
-      finale();
-    } else {
-      enterPeriod(true);
-      toast(`${Engine.dateLabel()}`, '晨');
-    }
+  /* 歇一日：写日记 / 夜谈 / 直接睡 —— 全都免费，行动点不再门控探索 */
+  function rest() {
+    if (Dialog.active || MG.active || window.BATTLE_ACTIVE || UI.panelOpen) return;
+    Dialog.play([
+      { who: '旁白', text: `一日将尽（${Engine.dateLabel()}）。` },
+      { choice: [
+        { t: '写日记 · 文笔 +3', fx: '史官日课', run() {
+            Engine.addWen(3);
+            return { say: { who: '旁白', text: '今日所见尽落纸上。文笔 +3。' } };
+        } },
+        { t: '找人夜谈 · 好感 +2', fx: '卧谈会', run() {
+            const met = G.flags.metPeople.filter(id => PEOPLE_BY_ID[id]);
+            if (met.length) {
+              const id = pick(met);
+              Engine.addFavorQuiet(id, 2);
+              const p = PEOPLE_BY_ID[id];
+              return { say: { who: '旁白', text: `熄灯后的卧谈会。话题绕到了${p.name}——你听了些新的传闻，好感 +2。` } };
+            }
+            return { say: { who: '旁白', text: '宿舍里没人开口。你听着风扇声睡着了。' } };
+        } },
+        { t: '早些睡', fx: '养神', run() {
+            return { say: { who: '旁白', text: '你早早睡了。明天仍是自由的一天。' } };
+        } },
+      ] },
+    ], () => {
+      Engine.nextDay();
+      UI.updateHUD(); UI.renderPlaces(); UI.renderHearsay(); World.refresh(); Quests.render(); Save.write();
+      toast(Engine.dateLabel(), '日');
+    });
   }
 
   /* ---------- 交互条 ---------- */
@@ -451,19 +508,10 @@ const Main = (() => {
     bar.innerHTML = '';
     bar.classList.add('hidden');
     if (Dialog.active || MG.active) return;
-    // 晚自习固定动作
-    if (Engine.period() === 'eve') {
-      bar.classList.remove('hidden');
-      const mk = (t, cls, fn, dis) => { const b = el('button', 'ctx-btn' + (cls ? ' ' + cls : ''), t); b.disabled = !!dis; b.onclick = fn; bar.appendChild(b); return b; };
-      mk('📖 撰史', '', () => UI.panelBook());
-      mk('✒ 写日记', '', () => { Engine.addWen(3); G.flags.rested = true; toast('日记写成，文笔 +3；明日精神抖擞（行动点+1）', '文'); Save.write(); });
-      mk('🌙 夜谈', '', nightTalk);
-      mk('就寝 →', 'accent', sleep);
-      return;
-    }
+    /* 场景特有动作（入景即可用，无需贴近谁） */
     const hasSceneAct = World.sceneId === 'library' || World.sceneId === 'shop' || World.sceneId === 'pingpong'
       || World.sceneId === 'playground'
-      || ((World.sceneId === 'classroom6' || World.sceneId === 'classroom7') && (Engine.period() === 'morning' || Engine.period() === 'aft'));
+      || World.sceneId === 'classroom6' || World.sceneId === 'classroom7';
     if (!near && !hasSceneAct) return;
     if (near) bar.classList.remove('hidden');
     if (near && near.type === 'quest') {
@@ -480,8 +528,7 @@ const Main = (() => {
       bar.appendChild(head);
       bar.appendChild(el('span', 'ctx-sub', `好感 ${fav}`));
       // 交谈
-      const free = G.chatCount < 2;
-      const chatBtn = el('button', 'ctx-btn', free ? '交谈' : '交谈 ⚡1');
+      const chatBtn = el('button', 'ctx-btn', '交谈');
       chatBtn.onclick = () => chat(p);
       bar.appendChild(chatBtn);
       // 赠礼
@@ -493,7 +540,7 @@ const Main = (() => {
       if (p.interview) {
         const need = p.ivNeed != null ? p.ivNeed : 30;
         const ok = fav >= need && !Engine.hasShard(p.interview.give);
-        const iv = el('button', 'ctx-btn' + (ok ? ' accent' : ''), ok ? '采访 ⚡1' : fav >= need ? '已采' : `采访 需好感${need}`);
+        const iv = el('button', 'ctx-btn' + (ok ? ' accent' : ''), ok ? '采访' : fav >= need ? '已采' : `采访 需好感${need}`);
         if (!ok) iv.disabled = true;
         iv.onclick = () => interview(p);
         bar.appendChild(iv);
@@ -517,9 +564,8 @@ const Main = (() => {
     // 场景特有动作（入景即可用，无需贴近谁）
     if (hasSceneAct) bar.classList.remove('hidden');
     if (World.sceneId === 'library') {
-      const b = el('button', 'ctx-btn', '读书 ⚡1 → 文笔+4');
+      const b = el('button', 'ctx-btn', '读书 → 文笔+4');
       b.onclick = () => {
-        if (!Engine.spendAP(1)) return;
         Engine.addWen(4); G.stats.reads++; Sfx.good();
         toast('读罢掩卷，文笔 +4', '文');
         if (Math.random() < 0.3) toast('（文言书看起来就是很上头）');
@@ -527,8 +573,8 @@ const Main = (() => {
       };
       bar.appendChild(b);
     }
-    if ((World.sceneId === 'classroom6' || World.sceneId === 'classroom7') && (Engine.period() === 'morning' || Engine.period() === 'aft')) {
-      const b = el('button', 'ctx-btn', '听课 ⚡1 → 文笔+2');
+    if (World.sceneId === 'classroom6' || World.sceneId === 'classroom7') {
+      const b = el('button', 'ctx-btn', '听课 → 文笔+2');
       b.onclick = () => listenClass();
       bar.appendChild(b);
     }
@@ -539,23 +585,22 @@ const Main = (() => {
     }
     if (World.sceneId === 'playground' && G.ch >= 8) {
       const clubOn = !!G.flags.xiehui;
-      const t = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '协会锦标赛 ⚡' : '协会未立（卷九后）');
+      const t = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '协会锦标赛' : '协会未立（推进主线至协会开张）');
       if (!clubOn) t.disabled = true;
-      else t.onclick = () => { if (!Engine.spendAP(1)) return; startTournament(); };
+      else t.onclick = () => startTournament();
       bar.appendChild(t);
       const tr = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '高难试炼' : '试炼未开');
       if (!clubOn) tr.disabled = true;
       else tr.onclick = () => panelTrial();
       bar.appendChild(tr);
-      const s = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '破败城墙 · 生存 ⚡' : '生存未开');
+      const s = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '破败城墙 · 生存' : '生存未开');
       if (!clubOn) s.disabled = true;
-      else s.onclick = () => { if (!Engine.spendAP(1)) return; startSurvival(); };
+      else s.onclick = () => startSurvival();
       bar.appendChild(s);
     }
     if (World.sceneId === 'pingpong') {
-      const b = el('button', 'ctx-btn', '打乒乓球 ⚡1');
+      const b = el('button', 'ctx-btn', '打乒乓球');
       b.onclick = () => {
-        if (!Engine.spendAP(1)) return;
         MG.launch('pingpong', ok => {
           if (ok) {
             Engine.award('ach_pp'); Engine.addWen(2); Engine.addMoney(5);
@@ -772,17 +817,6 @@ const Main = (() => {
     toast('听课认真，文笔 +2', '文');
     afterAction();
   }
-  function nightTalk() {
-    const met = G.flags.metPeople.filter(id => PEOPLE_BY_ID[id]);
-    if (Math.random() < 0.55 && met.length) {
-      const id = pick(met);
-      Engine.addFavor(id, 2);
-      Dialog.play([{ who:'旁白', text:`熄灯后的卧谈会。话题不知怎么绕到了${PEOPLE_BY_ID[id].name}——你听了些新的传闻，好感 +2。` }], afterAction);
-    } else {
-      Dialog.play([{ who:'旁白', text:'卧谈话题从史记聊到高考，从高考聊到宇宙。什么都没记下来，但睡得很香。' }], afterAction);
-    }
-  }
-
   /* ---------- 世界回调 ---------- */  function onCtxChange(near) { updateCtx(near); }
   function onNPC(p) {
     if (Dialog.active || MG.active) return;
@@ -854,7 +888,7 @@ const Main = (() => {
     const favAvg = castIds.size ? Math.round([...castIds].reduce((a, id) => a + Engine.favorOf(id), 0) / castIds.size) : 0;
     // 马刀行结局变体
     const wins = G.wins || 0, cards = (G.blades && G.blades.cards || []).length;
-    const rank = (window.Blades && Blades.rankName()) || '未入册';
+    const rank = (typeof Blades !== 'undefined' && Blades.rankName()) || '未入册';
     let bladePara;
     if (wins === 0) bladePara = '「全书几乎不提马刀。你站在刀场边上，把笔墨都留给了人。」';
     else if (wins >= 30) bladePara = `「另外——你的刀谱录了 ${cards} 人之技，生平 ${wins} 胜，封『${rank}』。马刀之神与你，只差一个名分。」`;
@@ -912,16 +946,14 @@ const Main = (() => {
     bindTitle();
     bindHUD();
     World.setOnCtx(onCtxChange);
-    // 底部「下一时段」由 placelist 附加
+    // 底部导航末位追加「歇一日」（自由世界：随时可推进日子，无时段门禁）
     const orig = UI.renderPlaces;
     UI.renderPlaces = function () {
       orig();
       const bar = $('#placelist');
-      if (Engine.period() !== 'eve') {
-        const b = el('button', 'place-btn here', '下一时段 ▸');
-        b.onclick = () => advancePeriod();
-        bar.appendChild(b);
-      }
+      const b = el('button', 'place-btn here', '歇一日 ▸');
+      b.onclick = () => rest();
+      bar.appendChild(b);
     };
     World.start();
   }
@@ -929,7 +961,7 @@ const Main = (() => {
   return { boot, onNPC, onEvent, afterDialog, updateCtx, onCtxChange,
            challenge, startDuel: p => SJI_UI.startBattle(duelCfg(p)), panelBlades, normalizeG,
            startTournament, startSurvival, startTrial, panelTrial, trialById,
-           onQuest, panelQuests };
+           onQuest, panelQuests, finale, rest, pickDifficulty };
 })();
 
 window.addEventListener('DOMContentLoaded', () => Main.boot());

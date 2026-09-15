@@ -37,12 +37,34 @@ check('战斗引擎/数据/UI 全部装配', assembled.engine && assembled.data 
 check('世界与主流程装配', assembled.world && assembled.main);
 check('音克思战斗卡已注册', assembled.yinkesi);
 
-// ===== 2. 新开一局进世界 =====
+// ===== 2. 新开一局：先择难度 → 开局即主线 =====
 await page.click('#btn-new');
 await page.waitForTimeout(600);
-try { await page.click('#chapter-card', { timeout: 4000 }); } catch (e) {}
+const diffPanel = await page.evaluate(() => ({
+  title: document.querySelector('#panel-title').textContent,
+  n: document.querySelectorAll('#panel-body .card').length,
+}));
+check('开卷前弹出难度选择（四档）', /难度/.test(diffPanel.title) && diffPanel.n === 4, diffPanel.title + ' / ' + diffPanel.n + ' 档');
+// 选「困难」：赏格 ×1.3，供下一节核对任务赏格
+await page.evaluate(() => {
+  const c = [...document.querySelectorAll('#panel-body .card')].find(x => x.textContent.includes('困难'));
+  c.querySelector('button').click();
+});
 await page.waitForTimeout(900);
+check('难度写入战斗层设置', await page.evaluate(() => window.SJI_SAVE.settings.lastDiff === 'hard'));
+try { await page.click('#chapter-card', { timeout: 2500 }); } catch (e) {}
+await page.waitForTimeout(800);
 check('进入世界（校园画布激活）', await page.evaluate(() => World.active && !window.BATTLE_ACTIVE));
+// 开局即主线：任务卡 / 令标记 / HUD 进度
+const qcard = await page.evaluate(() => document.querySelector('#questcard').textContent.replace(/\s+/g, ' '));
+check('开局即主线：任务卡显示「初执马刀」', qcard.includes('初执马刀'), qcard.slice(0, 44));
+check('HUD「令」位显示主线进度 0/9', await page.evaluate(() => document.querySelector('#hud-ap-v').textContent === '0/9'));
+const qMarker = await page.evaluate(() => {
+  const m = Quests.markers().find(x => x.main);
+  return m ? { id: m.q.id, where: m.q.where, dpos: m.dpos } : null;
+});
+check('世界画出主线「令」标记', !!qMarker && qMarker.id === 'm1', JSON.stringify(qMarker));
+check('开局落在主线首节所在地（操场）', await page.evaluate(() => World.sceneId === 'playground'));
 await page.screenshot({ path: `${OUT}/m1-02-world.png` });
 
 // ===== 3. 约战歆慧（图书馆有她）=====
@@ -106,40 +128,31 @@ await page.screenshot({ path: `${OUT}/m1-07-blades.png` });
 await page.click('#panel-close');
 await page.waitForTimeout(400);
 
-// ===== 7. M2：首战剧情对话 + 成传战门禁 =====
-// 7a. 首战大哥应挂上马刀风云卷一剧本（introScene）
-const introAttached = await page.evaluate(() => {
-  const cfg = Main.startDuel && null; // 不真开战，仅构建 cfg
-  return true;
-});
-const cfgProbe = await page.evaluate(() => {
-  // 借 challenge 的 cfg 构建：直接构造（与 duelCfg 同逻辑的可见结果在首战时验证）
-  return typeof Main.challenge === 'function';
-});
+// ===== 7. M2：立传已与主线解耦（原「成传战门禁」改为软提示） =====
+const cfgProbe = await page.evaluate(() => typeof Main.challenge === 'function');
 check('challenge 可调用', cfgProbe);
-// 7b. 成传战门禁：未胜大哥时卷一不可撰
-const gateBlocked = await page.evaluate(() => {
-  const v = VOL_BY_NO[1];
-  return !Writing.duelReady(1) && !Blades.hasCard('dage');
-});
-check('未胜传主时卷一门禁生效', gateBlocked);
+// 7b. 未胜传主时仍可开卷撰写（门禁已撤下），但面板会软提示
+const gateInfo = await page.evaluate(() => ({
+  ready: Writing.duelReady(1), won: Writing.duelWon(1), hasDage: Blades.hasCard('dage'),
+}));
+check('立传已与主线解耦（未胜传主也可开卷）', gateInfo.ready === true && gateInfo.hasDage === false, JSON.stringify(gateInfo));
 await page.evaluate(() => UI.panelBook());
 await page.waitForTimeout(500);
 await page.screenshot({ path: `${OUT}/m2-01-book-gate.png` });
-const gateHint = await page.evaluate(() => document.querySelector('#panel-body').innerHTML.includes('未胜传主'));
-check('卷目面板显示「未胜传主」提示', gateHint);
+check('卷目面板显示「不影响立传」软提示', await page.evaluate(() => document.querySelector('#panel-body').innerHTML.includes('不影响立传')));
 await page.click('#panel-close');
 await page.waitForTimeout(300);
-// 7c. 战胜大哥（模拟录入）后门禁解除
+// 7c. 战胜大哥（模拟录入）后 duelWon 转真
 const grantInfo = await page.evaluate(() => {
   const r = Blades.grant('dage');
   Save.write();
-  return { fresh: r.fresh, cards: G.blades.cards.slice(), ready: Writing.duelReady(1) };
+  return { fresh: r.fresh, cards: G.blades.cards.slice(), ready: Writing.duelReady(1), won: Writing.duelWon(1) };
 });
 console.log('  [grant dage]', JSON.stringify(grantInfo));
-check('胜传主后门禁解除', grantInfo.ready === true);
-// 7d. HUD 段位章
-check('HUD 段位章刷新', await page.evaluate(() => document.querySelector('#hud-blade-name').textContent.length > 0));
+check('胜传主后 duelWon 转为真', grantInfo.won === true);
+// 7d. HUD 段位章（这里顺带守住一个真 bug：const 全局不挂 window，用 window.Blades 判定会永远显示「未入册」）
+const hudRank = await page.evaluate(() => document.querySelector('#hud-blade-name').textContent);
+check('HUD 段位章显示真实段位（非「未入册」）', hudRank.length > 0 && !hudRank.includes('未入册'), hudRank);
 // 7e. 首战剧情：清档重来验证 introScene 挂接
 const sceneAttach = await page.evaluate(() => {
   // 直接走 duelCfg 内部逻辑：challenge 不可拆，这里验证 SCENE_OF_CHAR 存在于 Main 闭包外的可见效果——
@@ -182,6 +195,56 @@ if (sceneAttach === 'fresh') {
   await page.waitForTimeout(600);
   check('再次回到校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));
 }
+
+// ===== 7f. 主线任务端到端：接战 → 胜 → 赏格随难度 → 推进到下一节 =====
+const m1state = await page.evaluate(() => {
+  const q = Quests.current();
+  return { id: q.id, name: q.name, where: q.where, ch: G.ch };
+});
+check('新档当前主线为首节 m1', m1state.id === 'm1' && m1state.ch === 0, JSON.stringify(m1state));
+const moneyBeforeQuest = await page.evaluate(() => G.money);
+// onQuest 在距离过远时先寻路走近，故轮询调用直到对话弹出
+for (let i = 0; i < 8; i++) {
+  await page.evaluate(() => Main.onQuest(Quests.byId('m1')));
+  await page.waitForTimeout(850);
+  if (await page.evaluate(() => Dialog.active)) break;
+}
+check('走近「令」标记弹出接战对话', await page.evaluate(() => Dialog.active));
+for (let i = 0; i < 12; i++) {
+  if (await page.evaluate(() => !Dialog.active)) break;
+  await page.click('#dialog-box');
+  await page.waitForTimeout(280);
+}
+await page.waitForTimeout(900);
+check('主线任务开战（cfg.questId=m1）', await page.evaluate(() => window.BATTLE_ACTIVE && window.SJI.battle.cfg.questId === 'm1'));
+for (let i = 0; i < 14; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(300); }
+await page.waitForTimeout(2600);
+await page.evaluate(() => window.SJI_DEBUG.killEnemies());
+for (let i = 0; i < 14; i++) {
+  const done = await page.evaluate(() => !document.querySelector('#battle-result').classList.contains('hidden'));
+  if (done) break;
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(800);
+}
+await page.waitForTimeout(1200);
+const m1res = await page.evaluate(() => ({
+  result: window.SJI.battle.result, done: !!G.quests.m1, money: G.money,
+  next: Quests.current() && Quests.current().id, ch: G.ch,
+}));
+check('主线首节判定为胜', m1res.result === 'win');
+check('任务完成并自动推进到 m2', m1res.done === true && m1res.next === 'm2', 'next=' + m1res.next);
+// 困难 ×1.3：任务赏格 8→10，另加胜场例行 +3
+check('赏格随难度放大（×1.3 → 10，另加胜场 +3）', m1res.money - moneyBeforeQuest === 13, 'money +' + (m1res.money - moneyBeforeQuest));
+check('章节随主线推进（ch 0 → 1）', m1res.ch === 1, 'ch=' + m1res.ch);
+await page.screenshot({ path: `${OUT}/m2-04-quest-result.png` });
+await page.click('#r-menu');
+await page.waitForTimeout(800);
+// 主线推进后回世界会弹一道里程碑卡，点掉它以免挡住后续点击
+try { await page.click('#chapter-card', { timeout: 2500 }); } catch (e) {}
+await page.waitForTimeout(600);
+const qcardNext = await page.evaluate(() => document.querySelector('#questcard').textContent.replace(/\s+/g, ' '));
+check('任务卡自动刷新为下一节「实验三异能者」', qcardNext.includes('实验三异能者'), qcardNext.slice(0, 44));
+check('任务卡主线进度刷新为 1/9', await page.evaluate(() => document.querySelector('#hud-ap-v').textContent === '1/9'));
 
 // ===== 8. M3：协会锦标赛（三连战）+ 生存模式 =====
 await page.evaluate(() => {

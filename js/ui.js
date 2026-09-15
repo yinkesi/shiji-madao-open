@@ -31,18 +31,20 @@ const UI = (() => {
     const elx = $('#hud-' + stat + '-v');
     const chip = $('#hud-' + stat);
     if (!elx) return;
-    elx.textContent = stat === 'ap' ? G.ap : G[stat === 'wen' ? 'wen' : stat === 'rep' ? 'rep' : 'money'];
+    /* 「令」位现为主线进度（原行动点已退化为风味，不再是探索门禁） */
+    if (stat === 'ap') elx.textContent = (typeof Quests !== 'undefined') ? Quests.progressLabel() : '0/9';
+    else elx.textContent = stat === 'wen' ? G.wen : stat === 'rep' ? G.rep : G.money;
     chip.classList.remove('bump'); void chip.offsetWidth; chip.classList.add('bump');
   }
   function updateHUD() {
     $('#hud-date-main').textContent = Engine.dateLabel();
-    $('#hud-period').textContent = PERIOD_LABEL[Engine.period()];
-    $('#hud-ap-v').textContent = G.ap;
+    $('#hud-period').textContent = Engine.chLabel();
+    $('#hud-ap-v').textContent = (typeof Quests !== 'undefined') ? Quests.progressLabel() : '0/9';
     $('#hud-wen-v').textContent = G.wen;
     $('#hud-rep-v').textContent = G.rep;
     $('#hud-money-v').textContent = G.money;
     if ($('#hud-blade-name')) {
-      const rn = (window.Blades && Blades.rankName()) || '未入册';
+      const rn = (typeof Blades !== 'undefined' && Blades.rankName()) || '未入册';
       $('#hud-blade-name').textContent = rn === '马刀之神' ? '马刀之神' : (rn + (G.wins ? ` · ${G.wins}胜` : ''));
     }
     document.body.classList.remove('theme-morning', 'theme-day', 'theme-night');
@@ -78,7 +80,7 @@ const UI = (() => {
       d.onclick = () => { UI.closePanel(); UI.panelBook('gossip'); };
       list.appendChild(d);
     }
-    if (!evs.length && !missed.length) list.innerHTML = '<div class="hearsay-item">今日风平浪静，宜读书访友。</div>';
+    if (!evs.length && !missed.length) list.innerHTML = '<div class="hearsay-item">此地风平浪静，宜读书访友。</div>';
   }
   function toastScene(name) { toast(name, '行'); }
 
@@ -87,25 +89,25 @@ const UI = (() => {
   function panelBook(mode) {
     openPanel('史记 · 卷目', body => {
       const pub = Object.keys(G.vols).length;
-      const head = el('div', '', `<div class="muted">已立 ${pub} / 15 卷 · 直笔 ${G.stats.direct} 次 · 曲笔 ${G.stats.curve} 次</div><div style="height:10px"></div>`);
+      const head = el('div', '', `<div class="muted">已立 ${pub} / 15 卷 · 直笔 ${G.stats.direct} 次 · 曲笔 ${G.stats.curve} 次</div>
+        <div class="muted" style="margin-top:3px">立传为可选支线：与主线无关，随时可写。集满四料即可定稿，成卷自有报偿。</div><div style="height:10px"></div>`);
       body.appendChild(head);
       VOLS.forEach(v => {
         const st = G.vols[v.no];
         const pool = Object.keys(SHARDS).filter(id => SHARDS[id].vol === v.no);
         const owned = pool.filter(s => G.shards[s]).length;
-        const duelOk = !v.duel || (typeof Blades !== 'undefined' && Blades.hasCard(v.duel));
+        const duelWon = !v.duel || (typeof Blades !== 'undefined' && Blades.hasCard(v.duel));
         const row = el('div', 'vol-row' + (st ? '' : owned ? '' : ' locked'));
         const right = st ? `<span class="vol-grade g${st.grade}">${gradeName(st.grade)}</span>`
           : `<span class="muted">${owned}/${pool.length} 料</span>`;
-        const duelNote = (!st && v.duel && !duelOk)
-          ? `<small>未胜传主「${(window.SJI_DATA.CHARACTERS[v.duel] || {}).hao || v.duel}」——成传之战未打</small>`
+        const duelNote = (!st && v.duel && !duelWon)
+          ? `<small>未与传主「${(window.SJI_DATA.CHARACTERS[v.duel] || {}).hao || v.duel}」一战——不影响立传，胜之另可录其技</small>`
           : '';
         row.innerHTML = `<div class="vol-no">${v.i}</div>
           <div class="vol-name">${v.title}<small>${st ? `${st.style === '直' ? '直笔' : '曲笔'} · 得意 ${st.shards.length} 条` : `集 ${pool.length} 料取其四 · 文笔≥${v.minWen}`}</small>${duelNote}
           ${st ? '' : `<div class="progress-bar"><i style="width:${Math.round(owned / pool.length * 100)}%"></i></div>`}</div>${right}`;
         row.onclick = () => {
           if (st) viewVol(v.no);
-          else if (!duelOk) Writing.open(v.no);   // 借 Writing.open 的门禁 toast 提示去打传主
           else if (owned >= 4) Writing.open(v.no);
           else {
             const missing = v.pool.filter(s => !G.shards[s]);
@@ -254,7 +256,7 @@ const UI = (() => {
       mk('音效', [{ t:'开', v:false }, { t:'静音', v:true }], G.settings.muted, v => { G.settings.muted = v; });
       mk('打字速度', [{ t:'从容', v:1 }, { t:'风驰', v:2 }], G.settings.speed, v => { G.settings.speed = v; });
       /* 难度自选：写入战斗层设置，直接影响所有对决/试炼/任务的敌方强度与赏格 */
-      if (window.DIFFS && window.SJI_SAVE) {
+      if (typeof DIFFS !== 'undefined' && window.SJI_SAVE) {
         mk('马刀难度', DIFFS.map(d => ({ t: d.n, v: d.v })), Quests.diffV(), v => {
           SJI_SAVE.setSetting('lastDiff', v);
           const d = DIFF_BY_V[v];
