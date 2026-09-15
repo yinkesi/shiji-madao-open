@@ -233,6 +233,23 @@ const Blades = (() => {
       battle.player._innates = innates().slice();
       if (innates().length) battle.pushLog("身怀之技：" + innates().map(id => INNATE_INFO[id] ? INNATE_INFO[id].name : '').filter(Boolean).join('、') + "。");
     }
+    /* 文笔文斗（约战前选择）：骂阵削敌 / 檄文减冷却；此时才扣文笔 */
+    const duelWen = (window.G && G.flags && G.flags.duelWen) || null;
+    if (duelWen === 'ma') {
+      window.Engine.addWen(-10);
+      let n = 0;
+      battle.living('enemy').forEach(f => { f.hp = Math.max(1, f.hp - 1); n++; });
+      battle.pushLog("骂阵先声：敌方全员 -1 血（共 " + n + " 人）。");
+      window.G.flags.duelWen = null;
+      if (typeof Save !== 'undefined') Save.write();
+    } else if (duelWen === 'xi') {
+      window.Engine.addWen(-20);
+      const boon = window.SJI_DATA.BOONS.find(b => b.id === 'b_cd');
+      if (boon) battle._applyBoon(battle.player, boon);
+      battle.pushLog("檄文传遍战场：本场技能冷却 -1。");
+      window.G.flags.duelWen = null;
+      if (typeof Save !== 'undefined') Save.write();
+    }
     /* 稀有刀卡：每场只能携带一张（左上角可切换） */
     const carried = selectedRare();
     if (carried) {

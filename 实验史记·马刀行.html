@@ -689,8 +689,8 @@ body.theme-night #battle { background: radial-gradient(1100px 560px at 78% -12%,
     </div>
     <div class="hud-right">
       <div class="hud-chip stat" id="hud-ap" title="主线进度">令<b id="hud-ap-v">0/9</b></div>
-      <div class="hud-chip stat" id="hud-wen" title="文笔">✒<b id="hud-wen-v">5</b></div>
-      <div class="hud-chip stat" id="hud-rep" title="声望">☘<b id="hud-rep-v">50</b></div>
+      <div class="hud-chip stat" id="hud-wen" title="文笔：约战前可骂阵/檄文，立传之本">✒<b id="hud-wen-v">5</b></div>
+      <div class="hud-chip stat" id="hud-rep" title="声望：小卖部折扣、支线门槛">☘<b id="hud-rep-v">50</b></div>
       <div class="hud-chip stat" id="hud-money" title="零花钱">◉<b id="hud-money-v">10</b></div>
       <button class="hud-chip icon" id="btn-bag" title="行囊">囊</button>
       <button class="hud-chip icon" id="btn-menu" title="系统">☰</button>
@@ -4046,7 +4046,7 @@ const UI = (() => {
   function panelBook(mode) {
     openPanel('史记 · 卷目', body => {
       const pub = Object.keys(G.vols).length;
-      const head = el('div', '', `<div class="muted">已立 ${pub} / 15 卷 · 直笔 ${G.stats.direct} 次 · 曲笔 ${G.stats.curve} 次</div>
+      const head = el('div', '', `<div class="muted">已立 ${pub} / 15 卷 · 直笔 ${G.stats.direct} 次 · 曲笔 ${G.stats.curve} 次 · 文笔 ${G.wen} · 声望 ${G.rep}</div>
         <div class="muted" style="margin-top:3px">立传为可选支线：与主线无关，随时可写。集满四料即可定稿，成卷自有报偿。</div><div style="height:10px"></div>`);
       body.appendChild(head);
       VOLS.forEach(v => {
@@ -4157,18 +4157,21 @@ const UI = (() => {
   /* ============ 小卖部 ============ */
   function panelShop() {
     openPanel('小卖部', body => {
-      body.appendChild(el('div', 'muted', `零花钱 ◉${G.money} · 买东西送人，好感是采访与打听的本钱。`));
+      const disc = G.rep >= 80 ? 0.8 : G.rep >= 50 ? 0.9 : 1;
+      const discName = disc === 0.8 ? '八折' : disc === 0.9 ? '九折' : '无折扣';
+      body.appendChild(el('div', 'muted', `零花钱 ◉${G.money} · 声望 ${G.rep}（${discName}）· 买东西送人，好感是采访与打听的本钱。`));
       body.appendChild(el('div', '', '<div style="height:8px"></div>'));
       ITEMS.forEach(it => {
+        const price = Math.ceil(it.price * disc);
         const c = el('div', 'card');
         c.style.display = 'flex'; c.style.alignItems = 'center'; c.style.gap = '12px';
-        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${it.name} <span class="pill gold">◉${it.price}</span></h3><div class="meta">${it.desc}</div></div>`;
+        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${it.name} <span class="pill gold">◉${price}</span></h3><div class="meta">${it.desc}</div></div>`;
         const b = el('button', 'btn', '买');
         b.style.padding = '8px 18px';
-        b.disabled = G.money < it.price;
+        b.disabled = G.money < price;
         b.onclick = () => {
-          if (G.money < it.price) return;
-          Engine.addMoney(-it.price);
+          if (G.money < price) return;
+          Engine.addMoney(-price);
           G.bag[it.id] = (G.bag[it.id] || 0) + 1;
           Sfx.good(); toast(`购得「${it.name}」`, '购');
           Save.write(); UI.closePanel(); UI.panelShop();
@@ -7387,6 +7390,23 @@ const Blades = (() => {
       battle.player._innates = innates().slice();
       if (innates().length) battle.pushLog("身怀之技：" + innates().map(id => INNATE_INFO[id] ? INNATE_INFO[id].name : '').filter(Boolean).join('、') + "。");
     }
+    /* 文笔文斗（约战前选择）：骂阵削敌 / 檄文减冷却；此时才扣文笔 */
+    const duelWen = (window.G && G.flags && G.flags.duelWen) || null;
+    if (duelWen === 'ma') {
+      window.Engine.addWen(-10);
+      let n = 0;
+      battle.living('enemy').forEach(f => { f.hp = Math.max(1, f.hp - 1); n++; });
+      battle.pushLog("骂阵先声：敌方全员 -1 血（共 " + n + " 人）。");
+      window.G.flags.duelWen = null;
+      if (typeof Save !== 'undefined') Save.write();
+    } else if (duelWen === 'xi') {
+      window.Engine.addWen(-20);
+      const boon = window.SJI_DATA.BOONS.find(b => b.id === 'b_cd');
+      if (boon) battle._applyBoon(battle.player, boon);
+      battle.pushLog("檄文传遍战场：本场技能冷却 -1。");
+      window.G.flags.duelWen = null;
+      if (typeof Save !== 'undefined') Save.write();
+    }
     /* 稀有刀卡：每场只能携带一张（左上角可切换） */
     const carried = selectedRare();
     if (carried) {
@@ -7735,6 +7755,7 @@ const Quests = (() => {
     { id: 's_dage', name: '大哥的护手霜', where: 'corridor', pos: [400, 300],
       goal: '大哥好感≥20，再与他一战', cond: () => Engine.favorOf('dage') >= 20,
       cfg: { enemies: ['dage'], hpScale: 1.2 },
+      condHint: '大哥好感≥20',
       reward: { unlock: 'dage', innate: 'dage', money: 10, text: '「城墙之梦」常驻：立于城墙刀击+1；可点将出征「大哥」' },
       pre: [
         { who: '大哥', text: '音克思。吾有一物，欲托于汝。' },
@@ -7759,6 +7780,7 @@ const Quests = (() => {
     { id: 's_xinhui', name: '歆慧的一声滚', where: 'library', pos: [700, 380],
       goal: '歆慧好感≥25，接她一击', cond: () => Engine.favorOf('xinhui') >= 25,
       cfg: { enemies: ['xinhui'], hpScale: 1.25, rule: { id: 'dyad', desc: '她的「一声滚」可击退两格——莫贴边' } },
+      condHint: '歆慧好感≥25',
       reward: { unlock: 'xinhui', innate: 'xinhui', money: 12, text: '「灵光乍现」常驻：偶数回合行动+1；可点将出征「歆慧」' },
       pre: [
         { who: '歆慧', text: '有事？' },
@@ -7785,6 +7807,7 @@ const Quests = (() => {
     { id: 's_luhao', name: '锦绣昼行', where: 'dorm', pos: [450, 300],
       goal: '胜鲁豪一次（腹大如斗，刀伤翻倍）', cond: () => Blades.hasCard('luhao'),
       cfg: { enemies: ['luhao'], hpScale: 1.2 },
+      condHint: '已胜鲁豪',
       reward: { innate: 'luhao', rare: 'b_firststrike', money: 15, text: '身怀「大腹如斗」：生命上限+10、刀击翻倍（常驻）；另得稀有刀卡「先手刀」' },
       pre: [
         { who: '鲁豪', text: '（他掀开被角又盖上）五日了，就等查寝。' },
@@ -7813,6 +7836,7 @@ const Quests = (() => {
     { id: 's_touge', name: '三溴化氮', where: 'classroom7', pos: [540, 200],
       goal: '头哥好感≥30，试他的陀螺', cond: () => Engine.favorOf('touge') >= 30,
       cfg: { enemies: ['touge'], hpScale: 1.3, rule: { id: 'stench', desc: '溴味蚀人：回合末相邻互蚀 1 血——别贴他' } },
+      condHint: '头哥好感≥30',
       reward: { unlock: 'touge', innate: 'touge', money: 12, text: '「球棍意念」常驻：免疫击退；可点将出征「头哥」' },
       pre: [
         { who: '头哥', text: '汝可见吾之三溴化氮？' },
@@ -7837,7 +7861,7 @@ const Quests = (() => {
       ] },
 
     { id: 's_guayu', name: '提壶狂奔', where: 'canteen', pos: [540, 170],
-      goal: '胜呱宇一次（二成闪避，难缠）', cond: () => Blades.hasCard('guayu'),
+      goal: '胜呱宇一次（二成闪避，难缠）', cond: () => Blades.hasCard('guayu') && G.rep >= 60, condHint: '已胜呱宇，且声望≥60',
       cfg: { enemies: ['guayu', 'yiran'], hpScale: 0.85 },
       reward: { innate: 'guayu', rare: 'b_shield', money: 18, text: '身怀「疾如电」：20% 闪避（常驻）；另得稀有刀卡「班主任的偏爱」' },
       pre: [
@@ -7867,6 +7891,7 @@ const Quests = (() => {
     { id: 's_zichen', name: '体育课起义', where: 'playground', pos: [950, 300],
       goal: '子琛好感≥35，接他的起义', cond: () => Engine.favorOf('zichen') >= 35,
       cfg: { enemies: ['zichen'], hpScale: 1.3, rule: { id: 'uprising', desc: '第三回合其二心腹入场（起义）' } },
+      condHint: '子琛好感≥35',
       reward: { unlock: 'zichen', innate: 'zichen', money: 15, text: '「班长之威」常驻：相邻敌人伤害-1；可点将出征「子琛」' },
       pre: [
         { who: '子琛', text: '（他把演讲稿收进抽屉）体育课之事，汝听过什么风声？' },
@@ -7893,7 +7918,7 @@ const Quests = (() => {
       ] },
 
     { id: 's_win30', name: '以刀会友', where: 'playground', pos: [750, 450],
-      goal: '累计胜 10 场，与协会委员再战一场', cond: () => (G.wins || 0) >= 10,
+      goal: '累计胜 10 场，与协会委员再战一场', cond: () => (G.wins || 0) >= 10 && G.rep >= 70, condHint: '胜场≥10，且声望≥70',
       cfg: { enemies: ['luhao', 'xiaochuan', 'zichen'], hpScale: 0.62, rule: { id: 'chaos', desc: '三人各有二成机率打错人（同门相争）' } },
       reward: { innate: 'xiaochuan', rare: 'b_horse', money: 25, text: '身怀「卧薪尝胆」：受伤后下次伤害+1（常驻）；另得稀有刀卡「马踏连营」' },
       pre: [
@@ -9410,7 +9435,7 @@ const Main = (() => {
         const c = el('div', 'card');
         c.style.cssText = 'display:flex;align-items:center;gap:12px;opacity:' + (open ? 1 : 0.5);
         c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${q.name} ${done ? '<span class="pill jade">已成</span>' : open ? '<span class="pill">可接</span>' : '<span class="pill gray">条件未足</span>'}</h3>
-          <div class="meta">${q.goal}</div><div class="meta">解锁条件：${open ? '已满足' : '好感/胜场/记录未足——多走动、多交谈'}</div></div>`;
+          <div class="meta">${q.goal}</div><div class="meta">解锁条件：${open ? '已满足' : (q.condHint || '好感/胜场/记录未足——多走动、多交谈')}</div></div>`;
         const b = el('button', 'btn' + (open && !done ? ' btn-primary' : ''), done ? '已成' : '前往');
         b.style.padding = '7px 13px';
         if (done || !open) b.disabled = true;
@@ -9521,19 +9546,28 @@ const Main = (() => {
       { who: '音克思', text: '闲话少叙——马刀场上见真章。来呀来呀！' },
       { who: p.hao || p.name, text: pick(['来呀来呀，重开重开。', '规则至简，而引人入胜。——请。', '活者为王。开刀吧。']) },
     ];
-    /* 行囊里有战大道具，可择一携之入场 */
-    const itemIds = Object.keys(G.bag).filter(k => G.bag[k] > 0 && Blades.BATTLE_ITEMS[k]);
-    if (itemIds.length) {
-      script.push({
-        choice: itemIds.map(id => ({
-          t: `携「${ITEM_BY_ID[id].name}」入场`, fx: Blades.BATTLE_ITEMS[id].label,
-          run() {
-            G.bag[id]--; G.flags.duelItem = id; Save.write();
-            return { say: { who: '旁白', text: `（${ITEM_BY_ID[id].name}入怀，刀意更稳。）` } };
-          },
-        })).concat([{ t: '空手赴战', fx: '来呀来呀', run() { return null; } }]),
+    /* 战前准备：行囊战大道具（一次性）与文笔文斗（骂阵/檄文） */
+    const choices = [];
+    Object.keys(G.bag).filter(k => G.bag[k] > 0 && Blades.BATTLE_ITEMS[k]).forEach(id => {
+      choices.push({
+        t: `携「${ITEM_BY_ID[id].name}」入场`, fx: Blades.BATTLE_ITEMS[id].label,
+        run() {
+          G.bag[id]--; G.flags.duelItem = id; Save.write();
+          return { say: { who: '旁白', text: `（${ITEM_BY_ID[id].name}入怀，刀意更稳。）` } };
+        },
       });
-    }
+    });
+    if (G.wen >= 10) choices.push({
+      t: '骂阵 · 10 文笔', fx: '开战敌方全员 -1 血',
+      run() { G.flags.duelWen = 'ma'; Save.write();
+        return { say: { who: '旁白', text: '（一纸骂檄先声夺人，对方阵脚未整。）' } }; },
+    });
+    if (G.wen >= 20) choices.push({
+      t: '檄文 · 20 文笔', fx: '本场技能冷却 -1',
+      run() { G.flags.duelWen = 'xi'; Save.write();
+        return { say: { who: '旁白', text: '（笔扫千军，先声夺人。）' } }; },
+    });
+    if (choices.length) script.push({ choice: choices.concat([{ t: '空手赴战', fx: '来呀来呀', run() { return null; } }]) });
     Dialog.play(script, () => {
       knifeBanRiskOk(() => SJI_UI.startBattle(duelCfg(p)));
     });
@@ -9570,6 +9604,7 @@ const Main = (() => {
           if (PEOPLE_BY_ID[id]) Engine.addFavorQuiet(id, c.fresh ? 6 : 3);
         });
         Engine.addRep(2); Engine.addMoney(3);
+        if (G.rep >= 80) { Engine.addMoney(2); extra += '<div>名望远播：小卖部赊账 +2。</div>'; }
         /* 战斗成就 */
         if (G.wins >= 1) Engine.award('ach_duel1');
         if (G.wins >= 30) Engine.award('ach_duel30');

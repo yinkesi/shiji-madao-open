@@ -66,7 +66,7 @@ const Main = (() => {
         const c = el('div', 'card');
         c.style.cssText = 'display:flex;align-items:center;gap:12px;opacity:' + (open ? 1 : 0.5);
         c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${q.name} ${done ? '<span class="pill jade">已成</span>' : open ? '<span class="pill">可接</span>' : '<span class="pill gray">条件未足</span>'}</h3>
-          <div class="meta">${q.goal}</div><div class="meta">解锁条件：${open ? '已满足' : '好感/胜场/记录未足——多走动、多交谈'}</div></div>`;
+          <div class="meta">${q.goal}</div><div class="meta">解锁条件：${open ? '已满足' : (q.condHint || '好感/胜场/记录未足——多走动、多交谈')}</div></div>`;
         const b = el('button', 'btn' + (open && !done ? ' btn-primary' : ''), done ? '已成' : '前往');
         b.style.padding = '7px 13px';
         if (done || !open) b.disabled = true;
@@ -177,19 +177,28 @@ const Main = (() => {
       { who: '音克思', text: '闲话少叙——马刀场上见真章。来呀来呀！' },
       { who: p.hao || p.name, text: pick(['来呀来呀，重开重开。', '规则至简，而引人入胜。——请。', '活者为王。开刀吧。']) },
     ];
-    /* 行囊里有战大道具，可择一携之入场 */
-    const itemIds = Object.keys(G.bag).filter(k => G.bag[k] > 0 && Blades.BATTLE_ITEMS[k]);
-    if (itemIds.length) {
-      script.push({
-        choice: itemIds.map(id => ({
-          t: `携「${ITEM_BY_ID[id].name}」入场`, fx: Blades.BATTLE_ITEMS[id].label,
-          run() {
-            G.bag[id]--; G.flags.duelItem = id; Save.write();
-            return { say: { who: '旁白', text: `（${ITEM_BY_ID[id].name}入怀，刀意更稳。）` } };
-          },
-        })).concat([{ t: '空手赴战', fx: '来呀来呀', run() { return null; } }]),
+    /* 战前准备：行囊战大道具（一次性）与文笔文斗（骂阵/檄文） */
+    const choices = [];
+    Object.keys(G.bag).filter(k => G.bag[k] > 0 && Blades.BATTLE_ITEMS[k]).forEach(id => {
+      choices.push({
+        t: `携「${ITEM_BY_ID[id].name}」入场`, fx: Blades.BATTLE_ITEMS[id].label,
+        run() {
+          G.bag[id]--; G.flags.duelItem = id; Save.write();
+          return { say: { who: '旁白', text: `（${ITEM_BY_ID[id].name}入怀，刀意更稳。）` } };
+        },
       });
-    }
+    });
+    if (G.wen >= 10) choices.push({
+      t: '骂阵 · 10 文笔', fx: '开战敌方全员 -1 血',
+      run() { G.flags.duelWen = 'ma'; Save.write();
+        return { say: { who: '旁白', text: '（一纸骂檄先声夺人，对方阵脚未整。）' } }; },
+    });
+    if (G.wen >= 20) choices.push({
+      t: '檄文 · 20 文笔', fx: '本场技能冷却 -1',
+      run() { G.flags.duelWen = 'xi'; Save.write();
+        return { say: { who: '旁白', text: '（笔扫千军，先声夺人。）' } }; },
+    });
+    if (choices.length) script.push({ choice: choices.concat([{ t: '空手赴战', fx: '来呀来呀', run() { return null; } }]) });
     Dialog.play(script, () => {
       knifeBanRiskOk(() => SJI_UI.startBattle(duelCfg(p)));
     });
@@ -226,6 +235,7 @@ const Main = (() => {
           if (PEOPLE_BY_ID[id]) Engine.addFavorQuiet(id, c.fresh ? 6 : 3);
         });
         Engine.addRep(2); Engine.addMoney(3);
+        if (G.rep >= 80) { Engine.addMoney(2); extra += '<div>名望远播：小卖部赊账 +2。</div>'; }
         /* 战斗成就 */
         if (G.wins >= 1) Engine.award('ach_duel1');
         if (G.wins >= 30) Engine.award('ach_duel30');

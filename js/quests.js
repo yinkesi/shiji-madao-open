@@ -317,6 +317,7 @@ const Quests = (() => {
     { id: 's_dage', name: '大哥的护手霜', where: 'corridor', pos: [400, 300],
       goal: '大哥好感≥20，再与他一战', cond: () => Engine.favorOf('dage') >= 20,
       cfg: { enemies: ['dage'], hpScale: 1.2 },
+      condHint: '大哥好感≥20',
       reward: { unlock: 'dage', innate: 'dage', money: 10, text: '「城墙之梦」常驻：立于城墙刀击+1；可点将出征「大哥」' },
       pre: [
         { who: '大哥', text: '音克思。吾有一物，欲托于汝。' },
@@ -341,6 +342,7 @@ const Quests = (() => {
     { id: 's_xinhui', name: '歆慧的一声滚', where: 'library', pos: [700, 380],
       goal: '歆慧好感≥25，接她一击', cond: () => Engine.favorOf('xinhui') >= 25,
       cfg: { enemies: ['xinhui'], hpScale: 1.25, rule: { id: 'dyad', desc: '她的「一声滚」可击退两格——莫贴边' } },
+      condHint: '歆慧好感≥25',
       reward: { unlock: 'xinhui', innate: 'xinhui', money: 12, text: '「灵光乍现」常驻：偶数回合行动+1；可点将出征「歆慧」' },
       pre: [
         { who: '歆慧', text: '有事？' },
@@ -367,6 +369,7 @@ const Quests = (() => {
     { id: 's_luhao', name: '锦绣昼行', where: 'dorm', pos: [450, 300],
       goal: '胜鲁豪一次（腹大如斗，刀伤翻倍）', cond: () => Blades.hasCard('luhao'),
       cfg: { enemies: ['luhao'], hpScale: 1.2 },
+      condHint: '已胜鲁豪',
       reward: { innate: 'luhao', rare: 'b_firststrike', money: 15, text: '身怀「大腹如斗」：生命上限+10、刀击翻倍（常驻）；另得稀有刀卡「先手刀」' },
       pre: [
         { who: '鲁豪', text: '（他掀开被角又盖上）五日了，就等查寝。' },
@@ -395,6 +398,7 @@ const Quests = (() => {
     { id: 's_touge', name: '三溴化氮', where: 'classroom7', pos: [540, 200],
       goal: '头哥好感≥30，试他的陀螺', cond: () => Engine.favorOf('touge') >= 30,
       cfg: { enemies: ['touge'], hpScale: 1.3, rule: { id: 'stench', desc: '溴味蚀人：回合末相邻互蚀 1 血——别贴他' } },
+      condHint: '头哥好感≥30',
       reward: { unlock: 'touge', innate: 'touge', money: 12, text: '「球棍意念」常驻：免疫击退；可点将出征「头哥」' },
       pre: [
         { who: '头哥', text: '汝可见吾之三溴化氮？' },
@@ -419,7 +423,7 @@ const Quests = (() => {
       ] },
 
     { id: 's_guayu', name: '提壶狂奔', where: 'canteen', pos: [540, 170],
-      goal: '胜呱宇一次（二成闪避，难缠）', cond: () => Blades.hasCard('guayu'),
+      goal: '胜呱宇一次（二成闪避，难缠）', cond: () => Blades.hasCard('guayu') && G.rep >= 60, condHint: '已胜呱宇，且声望≥60',
       cfg: { enemies: ['guayu', 'yiran'], hpScale: 0.85 },
       reward: { innate: 'guayu', rare: 'b_shield', money: 18, text: '身怀「疾如电」：20% 闪避（常驻）；另得稀有刀卡「班主任的偏爱」' },
       pre: [
@@ -449,6 +453,7 @@ const Quests = (() => {
     { id: 's_zichen', name: '体育课起义', where: 'playground', pos: [950, 300],
       goal: '子琛好感≥35，接他的起义', cond: () => Engine.favorOf('zichen') >= 35,
       cfg: { enemies: ['zichen'], hpScale: 1.3, rule: { id: 'uprising', desc: '第三回合其二心腹入场（起义）' } },
+      condHint: '子琛好感≥35',
       reward: { unlock: 'zichen', innate: 'zichen', money: 15, text: '「班长之威」常驻：相邻敌人伤害-1；可点将出征「子琛」' },
       pre: [
         { who: '子琛', text: '（他把演讲稿收进抽屉）体育课之事，汝听过什么风声？' },
@@ -475,7 +480,7 @@ const Quests = (() => {
       ] },
 
     { id: 's_win30', name: '以刀会友', where: 'playground', pos: [750, 450],
-      goal: '累计胜 10 场，与协会委员再战一场', cond: () => (G.wins || 0) >= 10,
+      goal: '累计胜 10 场，与协会委员再战一场', cond: () => (G.wins || 0) >= 10 && G.rep >= 70, condHint: '胜场≥10，且声望≥70',
       cfg: { enemies: ['luhao', 'xiaochuan', 'zichen'], hpScale: 0.62, rule: { id: 'chaos', desc: '三人各有二成机率打错人（同门相争）' } },
       reward: { innate: 'xiaochuan', rare: 'b_horse', money: 25, text: '身怀「卧薪尝胆」：受伤后下次伤害+1（常驻）；另得稀有刀卡「马踏连营」' },
       pre: [

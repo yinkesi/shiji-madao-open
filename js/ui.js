@@ -89,7 +89,7 @@ const UI = (() => {
   function panelBook(mode) {
     openPanel('史记 · 卷目', body => {
       const pub = Object.keys(G.vols).length;
-      const head = el('div', '', `<div class="muted">已立 ${pub} / 15 卷 · 直笔 ${G.stats.direct} 次 · 曲笔 ${G.stats.curve} 次</div>
+      const head = el('div', '', `<div class="muted">已立 ${pub} / 15 卷 · 直笔 ${G.stats.direct} 次 · 曲笔 ${G.stats.curve} 次 · 文笔 ${G.wen} · 声望 ${G.rep}</div>
         <div class="muted" style="margin-top:3px">立传为可选支线：与主线无关，随时可写。集满四料即可定稿，成卷自有报偿。</div><div style="height:10px"></div>`);
       body.appendChild(head);
       VOLS.forEach(v => {
@@ -200,18 +200,21 @@ const UI = (() => {
   /* ============ 小卖部 ============ */
   function panelShop() {
     openPanel('小卖部', body => {
-      body.appendChild(el('div', 'muted', `零花钱 ◉${G.money} · 买东西送人，好感是采访与打听的本钱。`));
+      const disc = G.rep >= 80 ? 0.8 : G.rep >= 50 ? 0.9 : 1;
+      const discName = disc === 0.8 ? '八折' : disc === 0.9 ? '九折' : '无折扣';
+      body.appendChild(el('div', 'muted', `零花钱 ◉${G.money} · 声望 ${G.rep}（${discName}）· 买东西送人，好感是采访与打听的本钱。`));
       body.appendChild(el('div', '', '<div style="height:8px"></div>'));
       ITEMS.forEach(it => {
+        const price = Math.ceil(it.price * disc);
         const c = el('div', 'card');
         c.style.display = 'flex'; c.style.alignItems = 'center'; c.style.gap = '12px';
-        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${it.name} <span class="pill gold">◉${it.price}</span></h3><div class="meta">${it.desc}</div></div>`;
+        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${it.name} <span class="pill gold">◉${price}</span></h3><div class="meta">${it.desc}</div></div>`;
         const b = el('button', 'btn', '买');
         b.style.padding = '8px 18px';
-        b.disabled = G.money < it.price;
+        b.disabled = G.money < price;
         b.onclick = () => {
-          if (G.money < it.price) return;
-          Engine.addMoney(-it.price);
+          if (G.money < price) return;
+          Engine.addMoney(-price);
           G.bag[it.id] = (G.bag[it.id] || 0) + 1;
           Sfx.good(); toast(`购得「${it.name}」`, '购');
           Save.write(); UI.closePanel(); UI.panelShop();
