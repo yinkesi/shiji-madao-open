@@ -42,6 +42,23 @@ const UPGRADES = [
 ];
 const UPGRADE_BOON = { knife: 'b_knife', horse: 'b_horse', dodge: 'b_dodge', regen: 'b_regen', cd: 'b_cd', ap: 'b_ap' };
 
+/* 身怀之技：支线完成永久继承的角色被动（可多张叠加、无需装备；hp 为额外生命上限）。
+   机制侧由引擎 hasPassive(u, charId) 判定（_innates 注入），血量侧由 applyBoons 注入。 */
+const INNATE_INFO = {
+  dage:      { name: '城墙之梦', desc: '立于城墙时刀击伤害 +1', hp: 0 },
+  xinhui:    { name: '灵光乍现', desc: '每第二回合行动点 +1', hp: 0 },
+  luhao:     { name: '大腹如斗', desc: '生命上限 +10，刀击数值翻倍', hp: 10 },
+  touge:     { name: '球棍意念', desc: '免疫击退', hp: 0 },
+  guayu:     { name: '疾如电',   desc: '20% 闪避', hp: 0 },
+  zichen:    { name: '班长之威', desc: '相邻敌人对汝伤害 -1', hp: 0 },
+  xiaochuan: { name: '卧薪尝胆', desc: '每受伤一次，下次伤害 +1', hp: 0 },
+  shenren:   { name: '鲍鱼之肆', desc: '回合结束，相邻敌人各损 1 血', hp: 0 },
+  wonder:    { name: '马刀之神', desc: '血祭后接下来两次伤害翻倍', hp: 0 },
+  lifan:     { name: '课代表夺权', desc: '购刀不需行动点', hp: 0 },
+  guyin:     { name: '皇太子',   desc: '每场一次，受致命伤保留 1 血', hp: 0 },
+  shibo:     { name: '吸东来之紫气', desc: '每回合回复 1 血', hp: 0 },
+};
+
 /* 稀有刀卡：高难试炼首通 / 支线所授的质变被动（每场常驻）
    注：每条都必须在 SJI_DATA.BOONS 里有对应的可注入增益，否则 applyBoons 静默失效 */
 const RARE_BOONS = {
@@ -81,6 +98,25 @@ const Blades = (() => {
     if (!G.blades) G.blades = { cards: [], equip: null };
     G.blades.rare = G.blades.rare || [];
     return G.blades.rare;
+  }
+  /* 身怀之技：支线完成永久继承的被动（可叠加，无需装备） */
+  function innates() {
+    if (!window.G) return [];
+    if (!G.blades) G.blades = { cards: [], equip: null };
+    G.blades.innates = G.blades.innates || [];
+    return G.blades.innates;
+  }
+  function grantInnate(charId) {
+    if (!INNATE_INFO[charId]) return false;
+    if (!innates().includes(charId)) {
+      innates().push(charId);
+      const info = INNATE_INFO[charId];
+      if (typeof Save !== 'undefined') Save.write();
+      if (window.toast) toast(`身怀之技＋1：「${info.name}」——${info.desc}（常驻，无需装备）`, '承');
+      if (window.SJI_DATA) registerChar();
+      return true;
+    }
+    return false;
   }
 
   /* 段位 → 战斗加成（白板基础血 10，靠段位/修炼长上去） */
@@ -171,7 +207,8 @@ const Blades = (() => {
         desc: `胜${wins()}场：血上限+${hpBonus()}，每回合行动点+${apBonus()}。`
           + (upDesc ? `修炼：${upDesc}。` : '')
           + (eqId ? `技与被动承「${window.SJI_DATA.CHARACTERS[eqId].hao}」——其被动机制对汝生效。`
-                 : '白板无技——去赢一场，录他一技（连被动一并承之）。'),
+                 : '白板无技——去赢一场，录他一技（连被动一并承之）。')
+          + (innates().length ? ` 身怀：${innates().map(id => INNATE_INFO[id] ? '「' + INNATE_INFO[id].name + '」' : '').join('')}（常驻）。` : ''),
       },
       skill: sk,
       quote: '规则至简，而引人入胜。',
@@ -185,8 +222,17 @@ const Blades = (() => {
   function applyBoons(battle) {
     const asLead = !battle.player.charId || battle.player.charId === 'yinkesi';
     if (asLead) {
-      /* 获得角色 = 获得其全部技能：装备谁的卡，其被动机制即对音克思生效（引擎 passiveOwner） */
+      /* 获得角色 = 获得其全部技能：装备谁的卡，其被动机制即对音克思生效（引擎 hasPassive 多来源） */
       battle.player._learnedFrom = equippedSkillId() || null;
+      /* 身怀之技（支线永久继承的被动）：注入多来源集合 */
+      battle.player._innates = innates().slice();
+      const innateHp = innates().reduce((a, id) => a + ((INNATE_INFO[id] && INNATE_INFO[id].hp) || 0), 0);
+      if (innateHp > 0) {
+        battle.player.maxhp += innateHp;
+        battle.player.hp += innateHp;
+        battle.pushLog("身怀「大腹如斗」：血上限 +" + innateHp + "。");
+      }
+      if (innates().length) battle.pushLog("身怀之技：" + innates().map(id => INNATE_INFO[id] ? INNATE_INFO[id].name : '').filter(Boolean).join('、') + "。");
       const n = apBonus();
       for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
       for (const id of Object.keys(UPGRADE_BOON)) {
@@ -208,6 +254,7 @@ const Blades = (() => {
 
   return { registerChar, grant, equip, cards, hasCard, skillCardOf, equippedSkillId,
            rankName, nextRank, hpBonus, apBonus, applyBoons, buyUpgrade, grantRare,
+           innates, grantInnate, INNATE_INFO,
            upgrades, rareList, UPGRADES, RARE_BOONS, BATTLE_ITEMS, BLADE_RANKS };
 })();
 

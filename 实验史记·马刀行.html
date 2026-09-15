@@ -775,6 +775,7 @@ body.theme-night #battle { background: radial-gradient(1100px 560px at 78% -12%,
           <button class="btn" id="b-horse">购马·1动</button>
           <button class="btn" id="b-attack">刀击·1动</button>
           <button class="btn" id="b-horseatk">马踢·1动</button>
+          <button class="btn" id="b-drive">驱赶·1动</button>
           <button class="btn" id="b-skill">技能</button>
           <button class="btn" id="b-undo">撤销移动</button>
           <button class="btn" id="b-blood">血祭</button>
@@ -5144,28 +5145,33 @@ window.SJI_ENGINE = (function () {
     pushLog(s) { this.log.push(s); if (this.log.length > 120) this.log.shift(); if (window.SJI_UI) window.SJI_UI.onLog(s); }
 
     /* ---------- 伤害核心 ---------- */
-    /* 被动归属：音克思装备谁的刀卡，其被动机制即对装备者生效（44 处判定统一走此口） */
-    passiveOwner(u) {
-      if (u.charId === "yinkesi" && u._learnedFrom) return u._learnedFrom;
-      return u.charId;
+    /* 被动多来源判定：角色自身 + 音克思装备的刀卡 + 身怀之技（支线永久继承，可叠加）
+       全部被动判定一律走 hasPassive(u, charId)，不得直接比较 charId。 */
+    hasPassive(u, id) {
+      if (u.charId === id) return true;
+      if (u.charId === "yinkesi") {
+        if (u._learnedFrom === id) return true;
+        if (u._innates && u._innates.includes(id)) return true;
+      }
+      return false;
     }
 
-    _passiveImmuneStun(u) { const o = this.passiveOwner(u); return o === "xiannv" || o === "wanzhen"; }
+    _passiveImmuneStun(u) { return this.hasPassive(u, "xiannv") || this.hasPassive(u, "wanzhen"); }
 
     calcDamage(att, def, base, opts = {}) {
       let dmg = base;
       const t = opts.type || "knife";
       if (t === "knife") {
-        if (this.passiveOwner(att) === "dage" && isWall(att.r, att.c)) dmg += 1;
-        if (this.passiveOwner(att) === "weirong") dmg += 1;
+        if (this.hasPassive(att, "dage") && isWall(att.r, att.c)) dmg += 1;
+        if (this.hasPassive(att, "weirong")) dmg += 1;
         dmg += att.boons.knife || 0;
       }
       if (t === "horse") dmg += att.boons.horse || 0;
-      if (this.passiveOwner(att) === "luhao" && t === "knife") dmg *= 2;   // 大腹如斗：刀击数值翻倍
+      if (this.hasPassive(att, "luhao") && t === "knife") dmg *= 2;   // 大腹如斗：刀击数值翻倍
       if (att.boons && att.boons.firstStrike && t === "knife" && !att._usedFirstStrike) {
         att._usedFirstStrike = true; dmg += att.boons.firstStrike;
       }
-      if (this.passiveOwner(att) === "wenbin" && t === "knife" && Math.random() < 0.3) {   // 秒之：三成机率双倍
+      if (this.hasPassive(att, "wenbin") && t === "knife" && Math.random() < 0.3) {   // 秒之：三成机率双倍
         dmg *= 2;
         this.pushLog("「斌」秒之！一笔算出，伤害翻倍。");
         window.SJI_UI.fxFloat(def, "秒之！", "#ffd98a");
@@ -5173,10 +5179,10 @@ window.SJI_ENGINE = (function () {
       if (att.st.bloodlust > 0 && !opts.noBlood) { dmg *= 2; att.st.bloodlust--; }
       if (att.st.empower > 0) { dmg += att.st.empower; att.st.empower = 0; }
       if (att.st.grudge > 0) { dmg += att.st.grudge; att.st.grudge = 0; }
-      if (this.passiveOwner(att) === "yurun" && att.hp < 5) dmg += 1;
-      if (this.passiveOwner(att) === "shaoming" && def.hp <= def.maxhp / 2) dmg += 1;
-      if (this.passiveOwner(att) === "qinfa" && def.hp <= def.maxhp / 2) dmg += 1;
-      if (this.passiveOwner(att) === "dazhan" && this._keaiAdjacent(att)) dmg += 1;
+      if (this.hasPassive(att, "yurun") && att.hp < 5) dmg += 1;
+      if (this.hasPassive(att, "shaoming") && def.hp <= def.maxhp / 2) dmg += 1;
+      if (this.hasPassive(att, "qinfa") && def.hp <= def.maxhp / 2) dmg += 1;
+      if (this.hasPassive(att, "dazhan") && this._keaiAdjacent(att)) dmg += 1;
       // 剧情规则：敌人相邻同门
       if (opts.dyad && (opts.type === "knife" || opts.type === "horse") && att.side === "enemy" && this.living("enemy").length === 2 && this._friendlyAdjacent(att)) dmg += 1;
       if (att.side === "enemy" && !opts.noScale) {
@@ -5185,9 +5191,9 @@ window.SJI_ENGINE = (function () {
       }
       // 守方减伤
       if (!opts.pierce) {
-        if (this.passiveOwner(def) === "hanxiao") dmg -= 1;
-        if (this.passiveOwner(def) === "zichen" && adj(att, def)) dmg -= 1;
-        if (this.passiveOwner(def) === "yiran" && !def.dampUsed) { dmg -= 1; def.dampUsed = true; }
+        if (this.hasPassive(def, "hanxiao")) dmg -= 1;
+        if (this.hasPassive(def, "zichen") && adj(att, def)) dmg -= 1;
+        if (this.hasPassive(def, "yiran") && !def.dampUsed) { dmg -= 1; def.dampUsed = true; }
         // 护盾吸收已移至 dealDamage（在最小伤害钳制之后）
       }
       return Math.max(opts.min0 ? 0 : 1, dmg);
@@ -5204,12 +5210,12 @@ window.SJI_ENGINE = (function () {
     async dealDamage(att, def, base, opts = {}) {
       if (!def.alive || def.offField > 0 || this.over) return 0;
       if (window.SJI_UI && window.SJI_UI.fxAttack) window.SJI_UI.fxAttack(att, def, { type: opts.type || "knife" });
-      const pierce = opts.pierce || (att && this.passiveOwner(att) === "weibing");
+      const pierce = opts.pierce || (att && this.hasPassive(att, "weibing"));
       // 闪避
       if (!pierce && !opts.noDodge) {
         let dodge = 0;
-        if (this.passiveOwner(def) === "guayu") dodge += 0.2;
-        if (this.passiveOwner(def) === "xiangdong") dodge += 0.25;
+        if (this.hasPassive(def, "guayu")) dodge += 0.2;
+        if (this.hasPassive(def, "xiangdong")) dodge += 0.25;
         dodge += def.boons.dodge || 0;
         if (dodge > 0 && Math.random() < dodge) {
           this.pushLog("「" + def.ch.hao + "」疾如电，避之！");
@@ -5229,7 +5235,7 @@ window.SJI_ENGINE = (function () {
       this._trackMinHp(def);
       if (att.side === "player") { this.roundDealt += dmg; att.roundDealt = (att.roundDealt || 0) + dmg; }
       // 小川被动
-      if (this.passiveOwner(def) === "xiaochuan" && dmg > 0) def.st.grudge = Math.min(2, def.st.grudge + 1);
+      if (this.hasPassive(def, "xiaochuan") && dmg > 0) def.st.grudge = Math.min(2, def.st.grudge + 1);
       if (def.alive && def.hp > 0 && def.hp <= def.maxhp / 2) {
         if (def.side === "player") this._checkTriggers("playerLow");
         else if (def.side === "enemy") this._checkTriggers("enemyLow", def.charId);
@@ -5267,9 +5273,9 @@ window.SJI_ENGINE = (function () {
     }
 
     _tryLethalSave(def) {
-      if (this.passiveOwner(def) === "guyin" && !def.usedSave) { def.usedSave = true; def.hp = 1; this.pushLog("皇太子庇佑！「因」保留一血。"); window.SJI_UI.fxFloat(def, "皇太子！", "#ffd700"); return true; }
-      if (this.passiveOwner(def) === "xiangdong" && !def.usedSave) { def.usedSave = true; def.hp = 1; this.pushLog("「东」乘乱潜逃，保留一血！"); window.SJI_UI.fxFloat(def, "潜逃！", "#9db8ff"); return true; }
-      if (this.passiveOwner(def) === "chongguo" && !def.usedSave) { def.usedSave = true; def.hp = 3; this.pushLog("「国」弃车保帅，回复三血！"); window.SJI_UI.fxFloat(def, "弃车保帅！", "#9dff9d"); return true; }
+      if (this.hasPassive(def, "guyin") && !def.usedSave) { def.usedSave = true; def.hp = 1; this.pushLog("皇太子庇佑！「因」保留一血。"); window.SJI_UI.fxFloat(def, "皇太子！", "#ffd700"); return true; }
+      if (this.hasPassive(def, "xiangdong") && !def.usedSave) { def.usedSave = true; def.hp = 1; this.pushLog("「东」乘乱潜逃，保留一血！"); window.SJI_UI.fxFloat(def, "潜逃！", "#9db8ff"); return true; }
+      if (this.hasPassive(def, "chongguo") && !def.usedSave) { def.usedSave = true; def.hp = 3; this.pushLog("「国」弃车保帅，回复三血！"); window.SJI_UI.fxFloat(def, "弃车保帅！", "#9dff9d"); return true; }
       return false;
     }
 
@@ -5310,7 +5316,7 @@ window.SJI_ENGINE = (function () {
     }
 
     async pushUnit(u, fromR, fromC, steps) {
-      if (this.passiveOwner(u) === "touge") { this.pushLog("「头」与球棍意念合一，岿然不动。"); return; }
+      if (this.hasPassive(u, "touge")) { this.pushLog("「头」与球棍意念合一，岿然不动。"); return; }
       const dr = Math.sign(u.r - fromR), dc = Math.sign(u.c - fromC);
       let moved = 0;
       for (let i = 0; i < steps; i++) {
@@ -5364,7 +5370,7 @@ window.SJI_ENGINE = (function () {
     }
 
     async doBuyKnife(u) {
-      const free = this.passiveOwner(u) === "lifan";
+      const free = this.hasPassive(u, "lifan");
       if (u.hasKnife || (!free && u.apNow <= 0)) return false;
       if (!free) u.apNow--;
       u.hasKnife = true;
@@ -5432,6 +5438,27 @@ window.SJI_ENGINE = (function () {
       return dealt >= 0;
     }
 
+    /* 空地驱赶：空地上与相邻敌人纵马驱之，推开至多两格；无处可退者受 1 点踩踏伤。
+       与马踢互补——城墙用踢，空地用驱，马在全场都有用武之地。 */
+    async doDrive(u, t) {
+      if (this.rule && this.rule.id === "suomen") { this.pushLog("禁闭无马——驱赶亦不可用。"); return false; }
+      if (!u.hasHorse || u.apNow <= 0 || !t || !t.alive) return false;
+      if (isWall(u.r, u.c) || isWall(t.r, t.c)) return false;   // 仅限空地（城墙用马踢）
+      if (!adj(u, t)) return false;
+      u.apNow--;
+      this.lockUndo();
+      window.SJI_AUDIO.kick();
+      const r0 = t.r, c0 = t.c;
+      await this.pushUnit(t, u.r, u.c, 2);
+      if (t.r === r0 && t.c === c0) {
+        this.pushLog("无处可退，反受一踏！");
+        await this.dealDamage(u, t, 1, { type: "horse" });
+      } else if (t.alive) {
+        this.pushLog("「" + t.ch.hao + "」被驱开，阵脚已乱。");
+      }
+      return true;
+    }
+
     async doSacrifice(u) {
       if (u.apNow <= 0 || (!u.boons.bloodFree && u.hp < CFG.RULES.SAC_MIN_HP)) return false;
       u.apNow--;
@@ -5439,7 +5466,7 @@ window.SJI_ENGINE = (function () {
       const loss = u.boons.bloodFree ? 0 : Math.floor(u.hp / 2);
       u.hp -= loss;
       this._trackMinHp(u);
-      u.st.bloodlust += (this.passiveOwner(u) === "wonder" || u.boons.blood2) ? 2 : 1;
+      u.st.bloodlust += (this.hasPassive(u, "wonder") || u.boons.blood2) ? 2 : 1;
       if (u.side === "player") this.stats.usedBlood = true;
       window.SJI_UI.fxFloat(u, "-" + loss + " 血祭", "#ff5a5a");
       window.SJI_UI.fxStatus(u, "血祭！");
@@ -5695,7 +5722,7 @@ window.SJI_ENGINE = (function () {
 
     moveRange(u) {
       let mv = 1;
-      const own = this.passiveOwner(u); if (own === "dazhan" || own === "limo") mv = 2;
+      if (this.hasPassive(u, "dazhan") || this.hasPassive(u, "limo")) mv = 2;
       mv += u.boons.move || 0;
       return mv;
     }
@@ -5802,6 +5829,10 @@ window.SJI_ENGINE = (function () {
         // 刀击
         if (u.hasKnife && u.st.seal <= 0 && adj(u, target)) {
           await this.doKnife(u, target); await sleep(300); continue;
+        }
+        // 空地驱赶（互补于马踢）
+        if (u.hasHorse && !isWall(u.r, u.c) && !isWall(target.r, target.c) && adj(u, target) && Math.random() < prof.horse * 0.6) {
+          await this.doDrive(u, target); await sleep(300); continue;
         }
         // 马踢（同城）
         if (u.hasHorse && isWall(u.r, u.c) && isWall(target.r, target.c) && manh(u, target) <= 3) {
@@ -5913,7 +5944,7 @@ window.SJI_ENGINE = (function () {
           }
         }
       }
-      if (this.passiveOwner(u) === "xinhui" && this.round % 2 === 0) { ap += 1; this.pushLog("「慧」灵光乍现，行动点+1！"); }
+      if (this.hasPassive(u, "xinhui") && this.round % 2 === 0) { ap += 1; this.pushLog("「慧」灵光乍现，行动点+1！"); }
       return Math.max(0, Math.min(CFG.RULES.AP_CAP, ap));
     }
 
@@ -6119,7 +6150,7 @@ window.SJI_ENGINE = (function () {
       this._trackMinHp(this.player);
       // 回合结束被动
       for (const u of this.living()) {
-        if (this.passiveOwner(u) === "shibo") this.heal(u, 1, "吸东来之紫气，");
+        if (this.hasPassive(u, "shibo")) this.heal(u, 1, "吸东来之紫气，");
         if (u.boons.regen) this.heal(u, u.boons.regen, "吐纳，");
         if (u.charId === "keai") {
           const dz = this.units.find(x => x.alive && x.charId === "dazhan" && x.side === u.side);
@@ -6127,7 +6158,7 @@ window.SJI_ENGINE = (function () {
         }
       }
       for (const u of this.living()) {
-        if (this.passiveOwner(u) === "shenren") {
+        if (this.hasPassive(u, "shenren")) {
           const foes = this.opponentsOf(u).filter(f => adj(u, f));
           for (const f of foes) { this.rawHurt(f, 1, "近鲍鱼之肆而受毒"); await sleep(120); }
         }
@@ -7010,6 +7041,23 @@ const UPGRADES = [
 ];
 const UPGRADE_BOON = { knife: 'b_knife', horse: 'b_horse', dodge: 'b_dodge', regen: 'b_regen', cd: 'b_cd', ap: 'b_ap' };
 
+/* 身怀之技：支线完成永久继承的角色被动（可多张叠加、无需装备；hp 为额外生命上限）。
+   机制侧由引擎 hasPassive(u, charId) 判定（_innates 注入），血量侧由 applyBoons 注入。 */
+const INNATE_INFO = {
+  dage:      { name: '城墙之梦', desc: '立于城墙时刀击伤害 +1', hp: 0 },
+  xinhui:    { name: '灵光乍现', desc: '每第二回合行动点 +1', hp: 0 },
+  luhao:     { name: '大腹如斗', desc: '生命上限 +10，刀击数值翻倍', hp: 10 },
+  touge:     { name: '球棍意念', desc: '免疫击退', hp: 0 },
+  guayu:     { name: '疾如电',   desc: '20% 闪避', hp: 0 },
+  zichen:    { name: '班长之威', desc: '相邻敌人对汝伤害 -1', hp: 0 },
+  xiaochuan: { name: '卧薪尝胆', desc: '每受伤一次，下次伤害 +1', hp: 0 },
+  shenren:   { name: '鲍鱼之肆', desc: '回合结束，相邻敌人各损 1 血', hp: 0 },
+  wonder:    { name: '马刀之神', desc: '血祭后接下来两次伤害翻倍', hp: 0 },
+  lifan:     { name: '课代表夺权', desc: '购刀不需行动点', hp: 0 },
+  guyin:     { name: '皇太子',   desc: '每场一次，受致命伤保留 1 血', hp: 0 },
+  shibo:     { name: '吸东来之紫气', desc: '每回合回复 1 血', hp: 0 },
+};
+
 /* 稀有刀卡：高难试炼首通 / 支线所授的质变被动（每场常驻）
    注：每条都必须在 SJI_DATA.BOONS 里有对应的可注入增益，否则 applyBoons 静默失效 */
 const RARE_BOONS = {
@@ -7049,6 +7097,25 @@ const Blades = (() => {
     if (!G.blades) G.blades = { cards: [], equip: null };
     G.blades.rare = G.blades.rare || [];
     return G.blades.rare;
+  }
+  /* 身怀之技：支线完成永久继承的被动（可叠加，无需装备） */
+  function innates() {
+    if (!window.G) return [];
+    if (!G.blades) G.blades = { cards: [], equip: null };
+    G.blades.innates = G.blades.innates || [];
+    return G.blades.innates;
+  }
+  function grantInnate(charId) {
+    if (!INNATE_INFO[charId]) return false;
+    if (!innates().includes(charId)) {
+      innates().push(charId);
+      const info = INNATE_INFO[charId];
+      if (typeof Save !== 'undefined') Save.write();
+      if (window.toast) toast(`身怀之技＋1：「${info.name}」——${info.desc}（常驻，无需装备）`, '承');
+      if (window.SJI_DATA) registerChar();
+      return true;
+    }
+    return false;
   }
 
   /* 段位 → 战斗加成（白板基础血 10，靠段位/修炼长上去） */
@@ -7139,7 +7206,8 @@ const Blades = (() => {
         desc: `胜${wins()}场：血上限+${hpBonus()}，每回合行动点+${apBonus()}。`
           + (upDesc ? `修炼：${upDesc}。` : '')
           + (eqId ? `技与被动承「${window.SJI_DATA.CHARACTERS[eqId].hao}」——其被动机制对汝生效。`
-                 : '白板无技——去赢一场，录他一技（连被动一并承之）。'),
+                 : '白板无技——去赢一场，录他一技（连被动一并承之）。')
+          + (innates().length ? ` 身怀：${innates().map(id => INNATE_INFO[id] ? '「' + INNATE_INFO[id].name + '」' : '').join('')}（常驻）。` : ''),
       },
       skill: sk,
       quote: '规则至简，而引人入胜。',
@@ -7153,8 +7221,17 @@ const Blades = (() => {
   function applyBoons(battle) {
     const asLead = !battle.player.charId || battle.player.charId === 'yinkesi';
     if (asLead) {
-      /* 获得角色 = 获得其全部技能：装备谁的卡，其被动机制即对音克思生效（引擎 passiveOwner） */
+      /* 获得角色 = 获得其全部技能：装备谁的卡，其被动机制即对音克思生效（引擎 hasPassive 多来源） */
       battle.player._learnedFrom = equippedSkillId() || null;
+      /* 身怀之技（支线永久继承的被动）：注入多来源集合 */
+      battle.player._innates = innates().slice();
+      const innateHp = innates().reduce((a, id) => a + ((INNATE_INFO[id] && INNATE_INFO[id].hp) || 0), 0);
+      if (innateHp > 0) {
+        battle.player.maxhp += innateHp;
+        battle.player.hp += innateHp;
+        battle.pushLog("身怀「大腹如斗」：血上限 +" + innateHp + "。");
+      }
+      if (innates().length) battle.pushLog("身怀之技：" + innates().map(id => INNATE_INFO[id] ? INNATE_INFO[id].name : '').filter(Boolean).join('、') + "。");
       const n = apBonus();
       for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
       for (const id of Object.keys(UPGRADE_BOON)) {
@@ -7176,6 +7253,7 @@ const Blades = (() => {
 
   return { registerChar, grant, equip, cards, hasCard, skillCardOf, equippedSkillId,
            rankName, nextRank, hpBonus, apBonus, applyBoons, buyUpgrade, grantRare,
+           innates, grantInnate, INNATE_INFO,
            upgrades, rareList, UPGRADES, RARE_BOONS, BATTLE_ITEMS, BLADE_RANKS };
 })();
 
@@ -7502,7 +7580,7 @@ const Quests = (() => {
     { id: 's_dage', name: '大哥的护手霜', where: 'corridor', pos: [400, 300],
       goal: '大哥好感≥20，再与他一战', cond: () => Engine.favorOf('dage') >= 20,
       cfg: { enemies: ['dage'], hpScale: 1.2 },
-      reward: { unlock: 'dage', money: 10, text: '岳豪之梦已录：可点将出征「大哥」' },
+      reward: { unlock: 'dage', innate: 'dage', money: 10, text: '「城墙之梦」常驻：立于城墙刀击+1；可点将出征「大哥」' },
       pre: [
         { who: '大哥', text: '音克思。吾有一物，欲托于汝。' },
         { who: '音克思', text: '何物？' },
@@ -7526,7 +7604,7 @@ const Quests = (() => {
     { id: 's_xinhui', name: '歆慧的一声滚', where: 'library', pos: [700, 380],
       goal: '歆慧好感≥25，接她一击', cond: () => Engine.favorOf('xinhui') >= 25,
       cfg: { enemies: ['xinhui'], hpScale: 1.25, rule: { id: 'dyad', desc: '她的「一声滚」可击退两格——莫贴边' } },
-      reward: { unlock: 'xinhui', money: 12, text: '可点将出征「歆慧」' },
+      reward: { unlock: 'xinhui', innate: 'xinhui', money: 12, text: '「灵光乍现」常驻：偶数回合行动+1；可点将出征「歆慧」' },
       pre: [
         { who: '歆慧', text: '有事？' },
         { who: '音克思', text: '想请你接我一刀。' },
@@ -7552,7 +7630,7 @@ const Quests = (() => {
     { id: 's_luhao', name: '锦绣昼行', where: 'dorm', pos: [450, 300],
       goal: '胜鲁豪一次（腹大如斗，刀伤翻倍）', cond: () => Blades.hasCard('luhao'),
       cfg: { enemies: ['luhao'], hpScale: 1.2 },
-      reward: { rare: 'b_firststrike', money: 15, text: '稀有刀卡「先手刀」入手' },
+      reward: { innate: 'luhao', rare: 'b_firststrike', money: 15, text: '身怀「大腹如斗」：生命上限+10、刀击翻倍（常驻）；另得稀有刀卡「先手刀」' },
       pre: [
         { who: '鲁豪', text: '（他掀开被角又盖上）五日了，就等查寝。' },
         { who: '音克思', text: '我不是来查寝的。' },
@@ -7580,7 +7658,7 @@ const Quests = (() => {
     { id: 's_touge', name: '三溴化氮', where: 'classroom7', pos: [540, 200],
       goal: '头哥好感≥30，试他的陀螺', cond: () => Engine.favorOf('touge') >= 30,
       cfg: { enemies: ['touge'], hpScale: 1.3, rule: { id: 'stench', desc: '溴味蚀人：回合末相邻互蚀 1 血——别贴他' } },
-      reward: { unlock: 'touge', money: 12, text: '可点将出征「头哥」' },
+      reward: { unlock: 'touge', innate: 'touge', money: 12, text: '「球棍意念」常驻：免疫击退；可点将出征「头哥」' },
       pre: [
         { who: '头哥', text: '汝可见吾之三溴化氮？' },
         { who: '音克思', text: '盒中只有它。' },
@@ -7606,7 +7684,7 @@ const Quests = (() => {
     { id: 's_guayu', name: '提壶狂奔', where: 'canteen', pos: [540, 170],
       goal: '胜呱宇一次（二成闪避，难缠）', cond: () => Blades.hasCard('guayu'),
       cfg: { enemies: ['guayu', 'yiran'], hpScale: 0.85 },
-      reward: { rare: 'b_shield', money: 18, text: '稀有刀卡「班主任的偏爱」入手' },
+      reward: { innate: 'guayu', rare: 'b_shield', money: 18, text: '身怀「疾如电」：20% 闪避（常驻）；另得稀有刀卡「班主任的偏爱」' },
       pre: [
         { who: '呱宇', text: '（他举着水壶）借过，水，命。' },
         { who: '音克思', text: '打一场。' },
@@ -7634,7 +7712,7 @@ const Quests = (() => {
     { id: 's_zichen', name: '体育课起义', where: 'playground', pos: [950, 300],
       goal: '子琛好感≥35，接他的起义', cond: () => Engine.favorOf('zichen') >= 35,
       cfg: { enemies: ['zichen'], hpScale: 1.3, rule: { id: 'uprising', desc: '第三回合其二心腹入场（起义）' } },
-      reward: { unlock: 'zichen', money: 15, text: '可点将出征「子琛」' },
+      reward: { unlock: 'zichen', innate: 'zichen', money: 15, text: '「班长之威」常驻：相邻敌人伤害-1；可点将出征「子琛」' },
       pre: [
         { who: '子琛', text: '（他把演讲稿收进抽屉）体育课之事，汝听过什么风声？' },
         { who: '音克思', text: '听过。' },
@@ -7662,7 +7740,7 @@ const Quests = (() => {
     { id: 's_win30', name: '以刀会友', where: 'playground', pos: [750, 450],
       goal: '累计胜 10 场，与协会委员再战一场', cond: () => (G.wins || 0) >= 10,
       cfg: { enemies: ['luhao', 'xiaochuan', 'zichen'], hpScale: 0.62, rule: { id: 'chaos', desc: '三人各有二成机率打错人（同门相争）' } },
-      reward: { rare: 'b_horse', money: 25, text: '稀有刀卡「马踏连营」入手' },
+      reward: { innate: 'xiaochuan', rare: 'b_horse', money: 25, text: '身怀「卧薪尝胆」：受伤后下次伤害+1（常驻）；另得稀有刀卡「马踏连营」' },
       pre: [
         { who: '旁白', text: '又是操场看台下那张折叠桌。纸上的名字，如今是四行。' },
         { who: '鲁豪', text: '十胜。' },
@@ -7833,6 +7911,13 @@ const Quests = (() => {
       let lines = [`<div><b>任务完成：「${q.name}」</b></div>`];
       if (money) { Engine.addMoney(money); lines.push(`<div>零花钱 +${money}${mul !== 1 ? `（难度 ×${mul}）` : ''}</div>`); }
       if (rep) { Engine.addRep(rep); lines.push(`<div>声望 +${rep}</div>`); }
+      if (rw.innate) {
+        const info = Blades.INNATE_INFO[rw.innate];
+        if (info) {
+          const freshInnate = Blades.grantInnate(rw.innate);
+          lines.push(`<div>${freshInnate ? '<b>身怀之技＋1</b>：「' + info.name + '」——' + info.desc + '（永久常驻，无需装备）' : '（身怀「' + info.name + '」早已在身）'}</div>`);
+        }
+      }
       if (rw.rare) {
         const rareDefs = Blades.RARE_BOONS;
         if (rareDefs[rw.rare] && Blades.grantRare(rw.rare)) lines.push(`<div>稀有刀卡「${rareDefs[rw.rare].name}」入手</div>`);
@@ -8096,6 +8181,7 @@ window.SJI_UI = (function () {
     $("#b-horse").textContent = p.hasHorse ? "已购马" : "购马·1动";
     $("#b-attack").disabled = phaseLocked() || !p.hasKnife || p.apNow <= 0 || p.st.seal > 0 || !battle.opponentsOf(p).some(f => E.adj(p, f));
     $("#b-horseatk").disabled = phaseLocked() || !p.hasHorse || p.apNow <= 0 || !E.isWall(p.r, p.c) || (battle.rule && battle.rule.id === "suomen") || !battle.opponentsOf(p).some(f => E.isWall(f.r, f.c) && E.manh(p, f) <= 3);
+    $("#b-drive").disabled = phaseLocked() || !p.hasHorse || p.apNow <= 0 || E.isWall(p.r, p.c) || (battle.rule && battle.rule.id === "suomen") || !battle.opponentsOf(p).some(f => E.adj(p, f) && !E.isWall(f.r, f.c));
     $("#b-blood").disabled = phaseLocked() || p.apNow <= 0 || p.hp < 2;
     const undoN = (p._undo && p._undo.length) || 0;
     $("#b-undo").disabled = phaseLocked() || undoN === 0;
@@ -8159,6 +8245,7 @@ window.SJI_UI = (function () {
     $("#b-horse").onclick = async () => { AU.click(); await battle.doBuyHorse(battle.player); afterPlayerAction(); };
     $("#b-attack").onclick = () => { AU.click(); arm("knife"); };
     $("#b-horseatk").onclick = () => { AU.click(); arm("horse"); };
+    $("#b-drive").onclick = () => { AU.click(); arm("drive"); };
     $("#b-skill").onclick = () => {
       AU.click();
       const p = battle.player, sk = battle.skillOf(p, 0);
@@ -8595,11 +8682,12 @@ window.SJI_UI = (function () {
         dot(ctx, PAD + c * TILE + TILE / 2, PAD + r * TILE + TILE / 2, 10);
       }
     }
-    if (mode === "knife" || mode === "horse" || mode === "skill") {
+    if (mode === "knife" || mode === "horse" || mode === "skill" || mode === "drive") {
       const t = performance.now() / 300;
       const targets = battle.opponentsOf(p).filter(f =>
         mode === "knife" ? E.adj(p, f) :
         mode === "horse" ? (E.isWall(p.r, p.c) && E.isWall(f.r, f.c) && E.manh(p, f) <= 3) :
+        mode === "drive" ? (!E.isWall(p.r, p.c) && !E.isWall(f.r, f.c) && E.adj(p, f)) :
         chebSkillRange(p, f));
       for (const f of targets) {
         const pos = uPos(f);
@@ -8887,6 +8975,15 @@ window.SJI_UI = (function () {
         }
         mode = null; updateAll(); return;
       }
+      if (mode === "drive") {
+        if (target && p.hasHorse && !E.isWall(p.r, p.c) && !E.isWall(target.r, target.c) && E.adj(p, target) && battle.opponentsOf(p).includes(target)) {
+          mode = null;
+          await battle.doDrive(p, target);
+          afterPlayerAction();
+          return;
+        }
+        mode = null; updateAll(); return;
+      }
       if (mode === "skill") {
         if (target && battle.opponentsOf(p).includes(target) && chebSkillRange(p, target)) {
           mode = null;
@@ -8920,6 +9017,9 @@ window.SJI_UI = (function () {
       if (mode === "horse" && target && p.hasHorse && E.isWall(p.r, p.c) && E.isWall(target.r, target.c)
           && E.manh(p, target) <= 3 && battle.opponentsOf(p).includes(target)) {
         mode = null; await battle.doHorse(p, target); afterPlayerAction(); return;
+      }
+      if (mode === "drive" && target && p.hasHorse && !E.isWall(p.r, p.c) && !E.isWall(target.r, target.c) && E.adj(p, target) && battle.opponentsOf(p).includes(target)) {
+        mode = null; await battle.doDrive(p, target); afterPlayerAction(); return;
       }
       if (mode === "skill" && target && battle.opponentsOf(p).includes(target) && chebSkillRange(p, target)) {
         mode = null; await battle.doSkill(p, 0, target); afterPlayerAction(); return;
@@ -9373,6 +9473,17 @@ const Main = (() => {
         c.appendChild(b);
         body.appendChild(c);
       });
+      /* 身怀之技（支线永久继承的被动，可叠加、无需装备） */
+      const inn = Blades.innates();
+      if (inn.length) {
+        body.appendChild(el('div', 'muted', '<div style="height:12px"></div>身怀之技 · 支线完成永久继承，无需装备常驻生效：'));
+        inn.forEach(id => {
+          const info = Blades.INNATE_INFO[id];
+          if (!info) return;
+          const ch = window.SJI_DATA.CHARACTERS[id];
+          body.appendChild(el('div', 'card', `<h3 style="margin:0">「${info.name}」<span class="pill jade">常驻</span><span class="pill gray" style="margin-left:5px">承自 ${ch ? ch.hao : id}</span></h3><div class="meta">${info.desc}</div>`));
+        });
+      }
       /* 稀有刀卡（试炼首通所授） */
       const rares = Blades.rareList();
       if (rares.length) {

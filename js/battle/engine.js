@@ -162,28 +162,33 @@ window.SJI_ENGINE = (function () {
     pushLog(s) { this.log.push(s); if (this.log.length > 120) this.log.shift(); if (window.SJI_UI) window.SJI_UI.onLog(s); }
 
     /* ---------- 伤害核心 ---------- */
-    /* 被动归属：音克思装备谁的刀卡，其被动机制即对装备者生效（44 处判定统一走此口） */
-    passiveOwner(u) {
-      if (u.charId === "yinkesi" && u._learnedFrom) return u._learnedFrom;
-      return u.charId;
+    /* 被动多来源判定：角色自身 + 音克思装备的刀卡 + 身怀之技（支线永久继承，可叠加）
+       全部被动判定一律走 hasPassive(u, charId)，不得直接比较 charId。 */
+    hasPassive(u, id) {
+      if (u.charId === id) return true;
+      if (u.charId === "yinkesi") {
+        if (u._learnedFrom === id) return true;
+        if (u._innates && u._innates.includes(id)) return true;
+      }
+      return false;
     }
 
-    _passiveImmuneStun(u) { const o = this.passiveOwner(u); return o === "xiannv" || o === "wanzhen"; }
+    _passiveImmuneStun(u) { return this.hasPassive(u, "xiannv") || this.hasPassive(u, "wanzhen"); }
 
     calcDamage(att, def, base, opts = {}) {
       let dmg = base;
       const t = opts.type || "knife";
       if (t === "knife") {
-        if (this.passiveOwner(att) === "dage" && isWall(att.r, att.c)) dmg += 1;
-        if (this.passiveOwner(att) === "weirong") dmg += 1;
+        if (this.hasPassive(att, "dage") && isWall(att.r, att.c)) dmg += 1;
+        if (this.hasPassive(att, "weirong")) dmg += 1;
         dmg += att.boons.knife || 0;
       }
       if (t === "horse") dmg += att.boons.horse || 0;
-      if (this.passiveOwner(att) === "luhao" && t === "knife") dmg *= 2;   // 大腹如斗：刀击数值翻倍
+      if (this.hasPassive(att, "luhao") && t === "knife") dmg *= 2;   // 大腹如斗：刀击数值翻倍
       if (att.boons && att.boons.firstStrike && t === "knife" && !att._usedFirstStrike) {
         att._usedFirstStrike = true; dmg += att.boons.firstStrike;
       }
-      if (this.passiveOwner(att) === "wenbin" && t === "knife" && Math.random() < 0.3) {   // 秒之：三成机率双倍
+      if (this.hasPassive(att, "wenbin") && t === "knife" && Math.random() < 0.3) {   // 秒之：三成机率双倍
         dmg *= 2;
         this.pushLog("「斌」秒之！一笔算出，伤害翻倍。");
         window.SJI_UI.fxFloat(def, "秒之！", "#ffd98a");
@@ -191,10 +196,10 @@ window.SJI_ENGINE = (function () {
       if (att.st.bloodlust > 0 && !opts.noBlood) { dmg *= 2; att.st.bloodlust--; }
       if (att.st.empower > 0) { dmg += att.st.empower; att.st.empower = 0; }
       if (att.st.grudge > 0) { dmg += att.st.grudge; att.st.grudge = 0; }
-      if (this.passiveOwner(att) === "yurun" && att.hp < 5) dmg += 1;
-      if (this.passiveOwner(att) === "shaoming" && def.hp <= def.maxhp / 2) dmg += 1;
-      if (this.passiveOwner(att) === "qinfa" && def.hp <= def.maxhp / 2) dmg += 1;
-      if (this.passiveOwner(att) === "dazhan" && this._keaiAdjacent(att)) dmg += 1;
+      if (this.hasPassive(att, "yurun") && att.hp < 5) dmg += 1;
+      if (this.hasPassive(att, "shaoming") && def.hp <= def.maxhp / 2) dmg += 1;
+      if (this.hasPassive(att, "qinfa") && def.hp <= def.maxhp / 2) dmg += 1;
+      if (this.hasPassive(att, "dazhan") && this._keaiAdjacent(att)) dmg += 1;
       // 剧情规则：敌人相邻同门
       if (opts.dyad && (opts.type === "knife" || opts.type === "horse") && att.side === "enemy" && this.living("enemy").length === 2 && this._friendlyAdjacent(att)) dmg += 1;
       if (att.side === "enemy" && !opts.noScale) {
@@ -203,9 +208,9 @@ window.SJI_ENGINE = (function () {
       }
       // 守方减伤
       if (!opts.pierce) {
-        if (this.passiveOwner(def) === "hanxiao") dmg -= 1;
-        if (this.passiveOwner(def) === "zichen" && adj(att, def)) dmg -= 1;
-        if (this.passiveOwner(def) === "yiran" && !def.dampUsed) { dmg -= 1; def.dampUsed = true; }
+        if (this.hasPassive(def, "hanxiao")) dmg -= 1;
+        if (this.hasPassive(def, "zichen") && adj(att, def)) dmg -= 1;
+        if (this.hasPassive(def, "yiran") && !def.dampUsed) { dmg -= 1; def.dampUsed = true; }
         // 护盾吸收已移至 dealDamage（在最小伤害钳制之后）
       }
       return Math.max(opts.min0 ? 0 : 1, dmg);
@@ -222,12 +227,12 @@ window.SJI_ENGINE = (function () {
     async dealDamage(att, def, base, opts = {}) {
       if (!def.alive || def.offField > 0 || this.over) return 0;
       if (window.SJI_UI && window.SJI_UI.fxAttack) window.SJI_UI.fxAttack(att, def, { type: opts.type || "knife" });
-      const pierce = opts.pierce || (att && this.passiveOwner(att) === "weibing");
+      const pierce = opts.pierce || (att && this.hasPassive(att, "weibing"));
       // 闪避
       if (!pierce && !opts.noDodge) {
         let dodge = 0;
-        if (this.passiveOwner(def) === "guayu") dodge += 0.2;
-        if (this.passiveOwner(def) === "xiangdong") dodge += 0.25;
+        if (this.hasPassive(def, "guayu")) dodge += 0.2;
+        if (this.hasPassive(def, "xiangdong")) dodge += 0.25;
         dodge += def.boons.dodge || 0;
         if (dodge > 0 && Math.random() < dodge) {
           this.pushLog("「" + def.ch.hao + "」疾如电，避之！");
@@ -247,7 +252,7 @@ window.SJI_ENGINE = (function () {
       this._trackMinHp(def);
       if (att.side === "player") { this.roundDealt += dmg; att.roundDealt = (att.roundDealt || 0) + dmg; }
       // 小川被动
-      if (this.passiveOwner(def) === "xiaochuan" && dmg > 0) def.st.grudge = Math.min(2, def.st.grudge + 1);
+      if (this.hasPassive(def, "xiaochuan") && dmg > 0) def.st.grudge = Math.min(2, def.st.grudge + 1);
       if (def.alive && def.hp > 0 && def.hp <= def.maxhp / 2) {
         if (def.side === "player") this._checkTriggers("playerLow");
         else if (def.side === "enemy") this._checkTriggers("enemyLow", def.charId);
@@ -285,9 +290,9 @@ window.SJI_ENGINE = (function () {
     }
 
     _tryLethalSave(def) {
-      if (this.passiveOwner(def) === "guyin" && !def.usedSave) { def.usedSave = true; def.hp = 1; this.pushLog("皇太子庇佑！「因」保留一血。"); window.SJI_UI.fxFloat(def, "皇太子！", "#ffd700"); return true; }
-      if (this.passiveOwner(def) === "xiangdong" && !def.usedSave) { def.usedSave = true; def.hp = 1; this.pushLog("「东」乘乱潜逃，保留一血！"); window.SJI_UI.fxFloat(def, "潜逃！", "#9db8ff"); return true; }
-      if (this.passiveOwner(def) === "chongguo" && !def.usedSave) { def.usedSave = true; def.hp = 3; this.pushLog("「国」弃车保帅，回复三血！"); window.SJI_UI.fxFloat(def, "弃车保帅！", "#9dff9d"); return true; }
+      if (this.hasPassive(def, "guyin") && !def.usedSave) { def.usedSave = true; def.hp = 1; this.pushLog("皇太子庇佑！「因」保留一血。"); window.SJI_UI.fxFloat(def, "皇太子！", "#ffd700"); return true; }
+      if (this.hasPassive(def, "xiangdong") && !def.usedSave) { def.usedSave = true; def.hp = 1; this.pushLog("「东」乘乱潜逃，保留一血！"); window.SJI_UI.fxFloat(def, "潜逃！", "#9db8ff"); return true; }
+      if (this.hasPassive(def, "chongguo") && !def.usedSave) { def.usedSave = true; def.hp = 3; this.pushLog("「国」弃车保帅，回复三血！"); window.SJI_UI.fxFloat(def, "弃车保帅！", "#9dff9d"); return true; }
       return false;
     }
 
@@ -328,7 +333,7 @@ window.SJI_ENGINE = (function () {
     }
 
     async pushUnit(u, fromR, fromC, steps) {
-      if (this.passiveOwner(u) === "touge") { this.pushLog("「头」与球棍意念合一，岿然不动。"); return; }
+      if (this.hasPassive(u, "touge")) { this.pushLog("「头」与球棍意念合一，岿然不动。"); return; }
       const dr = Math.sign(u.r - fromR), dc = Math.sign(u.c - fromC);
       let moved = 0;
       for (let i = 0; i < steps; i++) {
@@ -382,7 +387,7 @@ window.SJI_ENGINE = (function () {
     }
 
     async doBuyKnife(u) {
-      const free = this.passiveOwner(u) === "lifan";
+      const free = this.hasPassive(u, "lifan");
       if (u.hasKnife || (!free && u.apNow <= 0)) return false;
       if (!free) u.apNow--;
       u.hasKnife = true;
@@ -450,6 +455,27 @@ window.SJI_ENGINE = (function () {
       return dealt >= 0;
     }
 
+    /* 空地驱赶：空地上与相邻敌人纵马驱之，推开至多两格；无处可退者受 1 点踩踏伤。
+       与马踢互补——城墙用踢，空地用驱，马在全场都有用武之地。 */
+    async doDrive(u, t) {
+      if (this.rule && this.rule.id === "suomen") { this.pushLog("禁闭无马——驱赶亦不可用。"); return false; }
+      if (!u.hasHorse || u.apNow <= 0 || !t || !t.alive) return false;
+      if (isWall(u.r, u.c) || isWall(t.r, t.c)) return false;   // 仅限空地（城墙用马踢）
+      if (!adj(u, t)) return false;
+      u.apNow--;
+      this.lockUndo();
+      window.SJI_AUDIO.kick();
+      const r0 = t.r, c0 = t.c;
+      await this.pushUnit(t, u.r, u.c, 2);
+      if (t.r === r0 && t.c === c0) {
+        this.pushLog("无处可退，反受一踏！");
+        await this.dealDamage(u, t, 1, { type: "horse" });
+      } else if (t.alive) {
+        this.pushLog("「" + t.ch.hao + "」被驱开，阵脚已乱。");
+      }
+      return true;
+    }
+
     async doSacrifice(u) {
       if (u.apNow <= 0 || (!u.boons.bloodFree && u.hp < CFG.RULES.SAC_MIN_HP)) return false;
       u.apNow--;
@@ -457,7 +483,7 @@ window.SJI_ENGINE = (function () {
       const loss = u.boons.bloodFree ? 0 : Math.floor(u.hp / 2);
       u.hp -= loss;
       this._trackMinHp(u);
-      u.st.bloodlust += (this.passiveOwner(u) === "wonder" || u.boons.blood2) ? 2 : 1;
+      u.st.bloodlust += (this.hasPassive(u, "wonder") || u.boons.blood2) ? 2 : 1;
       if (u.side === "player") this.stats.usedBlood = true;
       window.SJI_UI.fxFloat(u, "-" + loss + " 血祭", "#ff5a5a");
       window.SJI_UI.fxStatus(u, "血祭！");
@@ -713,7 +739,7 @@ window.SJI_ENGINE = (function () {
 
     moveRange(u) {
       let mv = 1;
-      const own = this.passiveOwner(u); if (own === "dazhan" || own === "limo") mv = 2;
+      if (this.hasPassive(u, "dazhan") || this.hasPassive(u, "limo")) mv = 2;
       mv += u.boons.move || 0;
       return mv;
     }
@@ -820,6 +846,10 @@ window.SJI_ENGINE = (function () {
         // 刀击
         if (u.hasKnife && u.st.seal <= 0 && adj(u, target)) {
           await this.doKnife(u, target); await sleep(300); continue;
+        }
+        // 空地驱赶（互补于马踢）
+        if (u.hasHorse && !isWall(u.r, u.c) && !isWall(target.r, target.c) && adj(u, target) && Math.random() < prof.horse * 0.6) {
+          await this.doDrive(u, target); await sleep(300); continue;
         }
         // 马踢（同城）
         if (u.hasHorse && isWall(u.r, u.c) && isWall(target.r, target.c) && manh(u, target) <= 3) {
@@ -931,7 +961,7 @@ window.SJI_ENGINE = (function () {
           }
         }
       }
-      if (this.passiveOwner(u) === "xinhui" && this.round % 2 === 0) { ap += 1; this.pushLog("「慧」灵光乍现，行动点+1！"); }
+      if (this.hasPassive(u, "xinhui") && this.round % 2 === 0) { ap += 1; this.pushLog("「慧」灵光乍现，行动点+1！"); }
       return Math.max(0, Math.min(CFG.RULES.AP_CAP, ap));
     }
 
@@ -1137,7 +1167,7 @@ window.SJI_ENGINE = (function () {
       this._trackMinHp(this.player);
       // 回合结束被动
       for (const u of this.living()) {
-        if (this.passiveOwner(u) === "shibo") this.heal(u, 1, "吸东来之紫气，");
+        if (this.hasPassive(u, "shibo")) this.heal(u, 1, "吸东来之紫气，");
         if (u.boons.regen) this.heal(u, u.boons.regen, "吐纳，");
         if (u.charId === "keai") {
           const dz = this.units.find(x => x.alive && x.charId === "dazhan" && x.side === u.side);
@@ -1145,7 +1175,7 @@ window.SJI_ENGINE = (function () {
         }
       }
       for (const u of this.living()) {
-        if (this.passiveOwner(u) === "shenren") {
+        if (this.hasPassive(u, "shenren")) {
           const foes = this.opponentsOf(u).filter(f => adj(u, f));
           for (const f of foes) { this.rawHurt(f, 1, "近鲍鱼之肆而受毒"); await sleep(120); }
         }

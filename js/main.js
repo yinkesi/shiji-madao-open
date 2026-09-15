@@ -325,6 +325,17 @@ const Main = (() => {
         c.appendChild(b);
         body.appendChild(c);
       });
+      /* 身怀之技（支线永久继承的被动，可叠加、无需装备） */
+      const inn = Blades.innates();
+      if (inn.length) {
+        body.appendChild(el('div', 'muted', '<div style="height:12px"></div>身怀之技 · 支线完成永久继承，无需装备常驻生效：'));
+        inn.forEach(id => {
+          const info = Blades.INNATE_INFO[id];
+          if (!info) return;
+          const ch = window.SJI_DATA.CHARACTERS[id];
+          body.appendChild(el('div', 'card', `<h3 style="margin:0">「${info.name}」<span class="pill jade">常驻</span><span class="pill gray" style="margin-left:5px">承自 ${ch ? ch.hao : id}</span></h3><div class="meta">${info.desc}</div>`));
+        });
+      }
       /* 稀有刀卡（试炼首通所授） */
       const rares = Blades.rareList();
       if (rares.length) {

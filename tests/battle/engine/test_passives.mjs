@@ -74,7 +74,28 @@ function faceFoe(b) {  // 玩家与敌人贴身
   await b.run();
   check('装备大师卡：回合末回复 1 血（吸东来之紫气）', p.hp >= 6, `hp=${p.hp}`);
 }
-/* 10. 敌方被动不受影响：guayu 闪避仍在（对照） */
+/* 10. 身怀之技：_innates 多来源叠加（鲁豪刀击翻倍 + 头哥免疫击退同时生效，无需装备） */
+{
+  const b = mk(null);
+  const p = b.player, f = faceFoe(b);
+  p._innates = ['luhao', 'touge'];
+  p.hasKnife = true;
+  check('身怀鲁豪：刀击 ×2', b.calcDamage(p, f, 1, { type: 'knife' }) === 2);
+  const r0 = p.r, c0 = p.c;
+  await b.pushUnit(p, 3, 1, 2);
+  check('身怀头哥：免疫击退', p.r === r0 && p.c === c0);
+}
+/* 11. 装备卡与身怀可叠加，且互不干扰 */
+{
+  const b = mk(null);
+  const p = b.player, f = faceFoe(b);
+  p._learnedFrom = 'luhao';
+  p._innates = ['touge', 'shenren'];
+  p.hasKnife = true;
+  check('装备卡与身怀叠加：装备鲁豪刀击×2 仍生效', b.calcDamage(p, f, 1, { type: 'knife' }) === 2);
+  check('身怀列表正确注入', b.hasPassive(p, 'touge') && b.hasPassive(p, 'shenren') && b.hasPassive(p, 'luhao'));
+}
+/* 12. 敌方被动不受影响：guayu 闪避仍在（对照） */
 {
   const b2 = new E.Battle({ mode: 'story', playerChar: 'yinkesi', enemies: ['guayu'], allies: [], diff: 'normal' });
   const g = b2.living('enemy')[0], p = b2.player;

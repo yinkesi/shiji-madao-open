@@ -163,6 +163,7 @@ window.SJI_UI = (function () {
     $("#b-horse").textContent = p.hasHorse ? "已购马" : "购马·1动";
     $("#b-attack").disabled = phaseLocked() || !p.hasKnife || p.apNow <= 0 || p.st.seal > 0 || !battle.opponentsOf(p).some(f => E.adj(p, f));
     $("#b-horseatk").disabled = phaseLocked() || !p.hasHorse || p.apNow <= 0 || !E.isWall(p.r, p.c) || (battle.rule && battle.rule.id === "suomen") || !battle.opponentsOf(p).some(f => E.isWall(f.r, f.c) && E.manh(p, f) <= 3);
+    $("#b-drive").disabled = phaseLocked() || !p.hasHorse || p.apNow <= 0 || E.isWall(p.r, p.c) || (battle.rule && battle.rule.id === "suomen") || !battle.opponentsOf(p).some(f => E.adj(p, f) && !E.isWall(f.r, f.c));
     $("#b-blood").disabled = phaseLocked() || p.apNow <= 0 || p.hp < 2;
     const undoN = (p._undo && p._undo.length) || 0;
     $("#b-undo").disabled = phaseLocked() || undoN === 0;
@@ -226,6 +227,7 @@ window.SJI_UI = (function () {
     $("#b-horse").onclick = async () => { AU.click(); await battle.doBuyHorse(battle.player); afterPlayerAction(); };
     $("#b-attack").onclick = () => { AU.click(); arm("knife"); };
     $("#b-horseatk").onclick = () => { AU.click(); arm("horse"); };
+    $("#b-drive").onclick = () => { AU.click(); arm("drive"); };
     $("#b-skill").onclick = () => {
       AU.click();
       const p = battle.player, sk = battle.skillOf(p, 0);
@@ -662,11 +664,12 @@ window.SJI_UI = (function () {
         dot(ctx, PAD + c * TILE + TILE / 2, PAD + r * TILE + TILE / 2, 10);
       }
     }
-    if (mode === "knife" || mode === "horse" || mode === "skill") {
+    if (mode === "knife" || mode === "horse" || mode === "skill" || mode === "drive") {
       const t = performance.now() / 300;
       const targets = battle.opponentsOf(p).filter(f =>
         mode === "knife" ? E.adj(p, f) :
         mode === "horse" ? (E.isWall(p.r, p.c) && E.isWall(f.r, f.c) && E.manh(p, f) <= 3) :
+        mode === "drive" ? (!E.isWall(p.r, p.c) && !E.isWall(f.r, f.c) && E.adj(p, f)) :
         chebSkillRange(p, f));
       for (const f of targets) {
         const pos = uPos(f);
@@ -954,6 +957,15 @@ window.SJI_UI = (function () {
         }
         mode = null; updateAll(); return;
       }
+      if (mode === "drive") {
+        if (target && p.hasHorse && !E.isWall(p.r, p.c) && !E.isWall(target.r, target.c) && E.adj(p, target) && battle.opponentsOf(p).includes(target)) {
+          mode = null;
+          await battle.doDrive(p, target);
+          afterPlayerAction();
+          return;
+        }
+        mode = null; updateAll(); return;
+      }
       if (mode === "skill") {
         if (target && battle.opponentsOf(p).includes(target) && chebSkillRange(p, target)) {
           mode = null;
@@ -987,6 +999,9 @@ window.SJI_UI = (function () {
       if (mode === "horse" && target && p.hasHorse && E.isWall(p.r, p.c) && E.isWall(target.r, target.c)
           && E.manh(p, target) <= 3 && battle.opponentsOf(p).includes(target)) {
         mode = null; await battle.doHorse(p, target); afterPlayerAction(); return;
+      }
+      if (mode === "drive" && target && p.hasHorse && !E.isWall(p.r, p.c) && !E.isWall(target.r, target.c) && E.adj(p, target) && battle.opponentsOf(p).includes(target)) {
+        mode = null; await battle.doDrive(p, target); afterPlayerAction(); return;
       }
       if (mode === "skill" && target && battle.opponentsOf(p).includes(target) && chebSkillRange(p, target)) {
         mode = null; await battle.doSkill(p, 0, target); afterPlayerAction(); return;
