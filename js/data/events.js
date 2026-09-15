@@ -4,7 +4,67 @@
    script 步骤: {who,text} | {choice:[{t,fx,favor,rep,say}]} | {ach:id} | {mg:'late'|'spin'|'canteen'} */
 'use strict';
 
+/* ================================================================
+   【这张表是干嘛的】
+   两张表：SHARDS 是“史料卡”字典（撰史玩法的素材，共 91 张——
+   注意它是个以 id 为键的对象，不是数组）；EVENTS 是“名场面事件”
+   数组（共 68 个，剧情主线的基本单位：走到现场 → 播剧本 →
+   发史料/成就/开新地点）。
+
+   【被谁消费】
+   - js/engine.js  grantShard 把史料收进存档（打听/转述来的会扣
+     文笔值）；eventsNow() 挑出本章还没经历的事件。
+   - js/world.js  把事件的 cast 人物临时搬到 scene+pos 现场，并在
+     现场画一个“记”字气泡提示可触发。
+   - js/dialog.js  播 script 剧本，并处理三种特殊步骤：
+     {choice:...} 出选项、{ach:id} 顺手发成就、{mg:...} 插入小游戏
+     （late=月考迟到 / spin=陀螺对战 / canteen=食堂冲刺）。
+   - js/writing.js  撰史时从已收集的 SHARDS 里挑卡排进起承转合
+     四槽算分。
+   - 文件末尾还会顺手给 data/people.js 的 PEOPLE_WAI 四人补采访。
+
+   【SHARDS 字段字典】（键是 id，值是一张卡）
+   id    卡片代号：'sh_' 开头是亲历/听来的史料，'sh_i_' 开头是采访
+         所得的“评”卡（撰史时“合”槽只收评）；
+   vol   所属卷号（第几卷的素材）；
+   name  卡名；
+   tags  标签数组，取值 事/言/趣/评：命中槽位偏好按 1.5 倍计分；
+   wen   文笔值 1~5，撰史计分基数（转述来的会被扣减）；
+   text  原文摘句（文言，摘自《实验史记》）。
+
+   【EVENTS 字段字典】
+   id       事件唯一代号（存档 G.doneEvents 记“做过没有”）；
+   ch       所属章节号（0=序章 … 15=番外），决定事件在哪章出现；
+   day      原定第几天（数字，或数组如 [1,2] 表示其中任一天）；
+   periods  原定时段（morning/noon/aft/eve）；
+            ※ 注意：day/periods 现在只是“日程备注”——引擎已改为
+            “本章之事随时可遇”，不再按天/时段门控（engine.js 的
+            eventsNow 只按 ch 过滤）；
+   scene    事件发生场景（data/scenes.js 的场景 id）；
+   pos      现场坐标 [x,y]（常与该场景 spots 锚点重合）；
+   name     事件名（任务板、提示气泡用）；
+   cast     登场人物 id 数组（data/people.js 的 id；world.js 会把
+            这些人拉到现场；不在 people 表里的 id 会被安静忽略）；
+   shard    通关后发放的史料卡 id（null=支线事件不发卡）；
+   flag     通关后置 G.flags[flag]=true：开新地点/门控支线
+            （如 xiehui=马刀协会开张、wonderTrial=试炼开关）；
+   ach      写在事件根上仅作备注；真正发成就靠剧本里的 {ach:id}
+            步骤（dialog.js 处理）；
+   mg       本事件内嵌小游戏类型（与剧本里 {mg:...} 步骤配套）；
+   script   剧本步骤数组，逐条播放：
+            {who, text} 普通台词步；
+            {choice:[…]} 选项步——每项 {t=文案, fx=成功率小字,
+            favor/rep=奖励, say=选后插播台词}（dialog.js 支持，
+            但当前 68 个事件还没用到 choice）；
+            {ach:'id'} 发成就；
+            {mg:'类型', who:'mg', text:说明} 小游戏步，输赢写回
+            该步骤的 _mgResult，由 main.js 结算。
+   ================================================================ */
+
+/* 史料卡字典：用 id 当键直接取，SHARDS['sh_wall'] 即“破败城墙”卡。
+   按卷分块（下面的 ---- 卷N ---- 行就是分块注释）。 */
 const SHARDS = {
+/* 示例：一张普通“事”卡——vol 第几卷 / tags 标签 / wen 文笔值 / text 原文摘句 */
 /* 卷一 */
 sh_shuban:{vol:1,name:'为兵搬书',tags:['事'],wen:3,text:'初入学，为兵谴数十人搬书。及还，谓哥曰：“尔搬何书？”对曰：“吾名为贾瀚元。”为兵笑。'},
 sh_fengshan:{vol:1,name:'风扇之战',tags:['事'],wen:4,text:'宿舍欲开风扇，鲁豪以身翼蔽开关。哥怒，目眦尽裂，数冲之，而鲁豪屹然不动。及打铃，哥飞身而下，乃开风扇。'},
@@ -12,6 +72,7 @@ sh_alarm:{vol:1,name:'三闹钟之罪',tags:['趣'],wen:2,text:'大哥晨必以�
 sh_cream:{vol:1,name:'护手霜三十四元',tags:['事'],wen:3,text:'哥得歆慧生辰，贻之护手霜二，共34元。曰：“其后歆慧课间每擦护手霜，必思我矣。”李帆笑曰：“盍不贻吾？”'},
 sh_wall:{vol:1,name:'破败城墙',tags:['趣'],wen:4,text:'高考激励大会，哥曰：“吾梦一城墙，苔藓覆其上，其高极大以至于不能尽。城墙者，高考也；苔藓者，困难也，吾终将尽城墙，胜高考。”众人皆叹服。'},
 sh_xianvoice:{vol:1,name:'神仙吵声',tags:['言'],wen:2,text:'神谓仙曰：“汝声妨害吾背诵也。”仙怒对曰：“关尔屁事，吾声响，乃吾勤奋专注也！”'},
+/* “评”卡（sh_i_ 前缀）：采访某人的收尾评语，撰史时只能进“合”槽 */
 sh_i_dage:{vol:1,name:'评·大哥',tags:['评'],wen:5,text:'音克思曰：与人不善，神情固执，而边幅不修耳。三子皆重外部评价，欲显于师，以塞虚荣之心。'},
 /* 卷二 */
 sh_zhiban:{vol:2,name:'查寝·值日表',tags:['事'],wen:3,text:'上招舍长议事，舍长中有刘鲁豪者，不排。笑大怒，召之至办公室，骂之一节课，乃放还。'},
@@ -115,6 +176,8 @@ sh_pingpong:{vol:6,name:'正手？反手？',tags:['趣'],wen:3,text:'展直拍�
 };
 
 /* ================= 名场面事件 ================= */
+/* 事件主表：数组，每章一组（见 ---- chN ---- 分块注释）。
+   world.js 每次进场景都会遍历它，看本章还有哪些事没经历。 */
 const EVENTS = [
 /* ---- 序章（ch0） ---- */
 { id:'ev_prologue_read', ch:0, day:1, periods:['morning','noon','aft'], scene:'library', pos:[300,380], name:'起意', cast:['luhao'], shard:null,
@@ -163,6 +226,9 @@ const EVENTS = [
     {who:'李帆', text:'盍不贻吾？'},
     {who:'旁白', text:'哥无以对，恍惚而去。'},
   ]},
+/* ---- 示例事件一：普通主线事件 ----
+   ch=1 第 3 天上午在操场；cast 把大哥拉到现场；播完剧本后
+   得 sh_wall 史料卡；剧本最后一步 {ach:'ach_wall'} 顺手发成就。 */
 { id:'ev_wall', ch:1, day:3, periods:['morning'], scene:'playground', pos:[950,300], name:'破败城墙', cast:['dage'], shard:'sh_wall', ach:'ach_wall',
   script:[
     {who:'旁白', text:'高考激励大会。大哥勇而发言，旁人讥之而哥不顾。'},
@@ -347,6 +413,10 @@ const EVENTS = [
     {who:'为兵', text:'（巡视至此，深异之）尔等安有如修逸折正二十面体者乎？'},
     {who:'旁白', text:'号之曰“教授”，于众面赞之。'},
   ]},
+/* ---- 示例事件二：内嵌小游戏的事件 ----
+   剧本里 {mg:'spin'} 那一步会切到陀螺对战（mg=小游戏类型，
+   who:'mg' 表示这步不念台词、text 是玩法说明）；输赢写回该步骤的
+   _mgResult，main.js 结算：赢了拿成就，输了史料也会到手但成色打折。 */
 { id:'ev_suoxiao', ch:7, day:[1,2], periods:['aft'], scene:'classroom7', pos:[540,430], name:'三溴化氮之战', cast:['touge'], shard:'sh_sui', mg:'spin',
   script:[
     {who:'头哥', text:'（掏出球棍与陀螺）此陀螺，名曰三溴化氮，鲜有败绩。'},
@@ -627,6 +697,8 @@ const EVENTS = [
   ]},
 
 /* ---- 马刀行 · 支线刀史（据卷八《马刀书》改编） ---- */
+/* 支线事件：shard 都是 null（不发史料），靠 flag 开门——
+   如 ev_xiehui 过完置 G.flags.xiehui=true，操场马刀协会才开张。 */
 { id:'ev_xiehui', ch:9, day:1, periods:['noon','aft'], scene:'playground', pos:[750,450], name:'世界马刀协会成立', cast:['luhao','xiaochuan','zichen'], shard:null, flag:'xiehui',
   script:[
     {who:'旁白', text:'操场空地，五人聚义。桌上摆着一副手写的章程。'},
@@ -665,10 +737,14 @@ const EVENTS = [
   ]},
 ];
 
+/* 反查索引：id → 事件对象（与 PEOPLE_BY_ID 同款“空对象 + forEach”三行）。 */
 const EVENT_BY_ID = {};
 EVENTS.forEach(e => EVENT_BY_ID[e.id] = e);
 
 /* 二中四人采访（在 ch15 校门口可用） */
+/* 下面逐个给 PEOPLE_WAI 四人补 interview 字段（give=采完发的“评”卡）。
+   注意这是在“改数据”而不是纯读数据：data 文件按顺序加载，
+   这里能改 people.js 里建好的对象，正是全局变量通信的副作用。 */
 PEOPLE_WAI[0].interview = { give:'sh_i_shengxiang', script:[
   {who:'晟翔', text:'汝真要写吾班之事？'},
   {who:'音克思', text:'写。史官不问远近。'},
@@ -686,4 +762,6 @@ PEOPLE_WAI[3].interview = { give:'sh_i_lianqi', script:[
   {who:'连奇', text:'予尔二择：a 写吾，b 不写。'},
   {who:'音克思', text:'（他连接受采访都像下最后通牒。）a。'},
 ]};
+/* 再批量补齐站位与台词：home 定在校门口、统一打招呼/闲聊文案；
+   ivNeed=0 表示采访不设好感门槛（main.js 里没写 ivNeed 默认要 30）。 */
 PEOPLE_WAI.forEach(p => { p.home = 'gate'; p.greet = ['（二中来交流的学生。）']; p.chat = ['（他讲起班里的党争，叹了口气。）']; p.ivNeed = 0; });

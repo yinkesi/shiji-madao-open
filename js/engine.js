@@ -2,12 +2,45 @@
    自由开放世界：没有「章节靠睡觉推进」的时间线。章节（G.ch）由主线完成度驱动，
    时段与行动点退化为氛围与风味，不再门控任何玩法。 */
 'use strict';
+/* ================================================================
+   【这个文件是干嘛的】
+   世界层的状态机：定义全局存档对象 G 的结构、章节进度推导、事件查询、
+   风险判定（被巡查逮住的小剧场）、资源增减（文笔/声望/零花钱/好感）、
+   史料收集与成就表。
+
+   【架构位置】
+   在 config.js 与 data/* 之后、world.js 之前加载。
+   依赖：data 里的 CHAPTERS / EVENTS / SHARDS / PEOPLE*（顶层裸名），
+   以及 config 的 clamp / toast / Sfx / Save；方法里还会调 UI、Dialog、
+   World——这些文件在本文件之后加载也没关系，JS 的全局名是在“运行到
+   那一行时”才去查找的，不是加载时。被几乎所有世界侧文件调用。
+
+   【暴露的全局名】
+   PERIODS / PERIOD_LABEL / PERIOD_THEME、newGameState、
+   window.G（全局状态本体）、Engine、ACHIEVEMENTS。
+
+   【新手阅读提示】
+   1) G 是整个游戏唯一的“账本”，一切进度都在这一个对象里；它被特意挂到
+      window 上（window.G = null），战斗层只认 window.G。
+   2) 章节号 G.ch 不再由睡觉/日程推进，而是从主线任务完成度“推导”出来，
+      且只进不退（见 Engine.syncChapter），老存档也不会章节回跳。
+   3) 注意战斗层也有个 js/battle/engine.js，那是回合制对战的核心，
+      与本文件是两个东西。
+   ================================================================ */
 
 /* 时段仅作氛围与 NPC 调度参考（世界不按课表走） */
+/* 四个时段的 id 数组，外加两张映射表：显示名、<body> 上的主题 class
+   （用于白天/夜间换肤）。PERIODS 的下标与 G.periodIdx 对应。 */
 const PERIODS = ['morning', 'noon', 'aft', 'eve'];
 const PERIOD_LABEL = { morning:'上午', noon:'午间', aft:'下午', eve:'夜间' };
 const PERIOD_THEME = { morning:'theme-morning', noon:'theme-day', aft:'theme-day', eve:'theme-night' };
 
+/* 造一份全新存档。整个游戏的所有进度都装在这一个对象里：
+   ver=存档版本号（读档时据此做旧档兼容）、ch=章节、day/periodIdx=时间、
+   wen/rep/money=文笔/声望/零花钱、shards=已得史料、vols=已发表各卷、
+   bag=行囊、ach=成就、flags=一次性标记、blades/quests=刀卡与任务、
+   settings=玩家设置、stats=统计数字（不少成就靠它判定）。
+   存档时把整个对象 JSON.stringify 后写进 localStorage。 */
 function newGameState() {
   return {
     ver: 2,
@@ -34,15 +67,25 @@ function newGameState() {
   };
 }
 
+/* 全局状态 G 的“户口”。特意用 window.G 而不是顶层 const：
+   战斗层（blades.js 等）要通过 window.G 拿账本；真正的赋值发生在
+   main.js 开新档/读档时（G = newGameState() 或 G = 读出的存档），
+   此刻先占位 null。 */
 window.G = null;
 
+/* 世界状态机：一个普通对象字面量充当“命名空间”，方法之间用 this 互调
+   （如 this.chDef()）。没有 class，也没有模块，就是最朴素的组织方式。 */
 const Engine = {
   /* ---------- 进度（章节 ↔ 主线） ---------- */
+  /* 当前章节的配置数据（CHAPTERS 表在 data/volumes.js）、时段、日期文案。 */
   chDef() { return CHAPTERS[G.ch] || CHAPTERS[0]; },
   period() { return PERIODS[G.periodIdx] || 'morning'; },
   dateLabel() { const c = this.chDef(); return `${c.date} · 第 ${G.day} 日`; },
   chLabel() { return this.chDef().title; },
   /** 章节由主线完成度推导；只进不退（老档原进度保留） */
+  /* 章节同步：问主线任务系统 Quests“按现在的完成度应该是第几章”，
+     只有想要的章节数更大才推进——单向推导、只进不退，
+     旧存档里已到的进度绝不会往回拨。 */
   syncChapter() {
     if (typeof Quests === 'undefined') return false;
     const want = Quests.chapterNow();
@@ -53,6 +96,7 @@ const Engine = {
   syncWorldFlags() {
     if (G.ch >= 8) G.flags.xiehui = true;   // 世界马刀协会开张（m4 后）
   },
+  /* 取走“待播报的新章节”标记：一次性读取，读完即清空（null）。 */
   takePendingChapter() { const c = this.pendingCh; this.pendingCh = null; return c == null ? null : c; },
   pendingCh: null,
   /** 仅供测试/调试：直接推进章节号（正式流程由 syncChapter 按主线驱动） */
@@ -62,6 +106,8 @@ const Engine = {
   },
 
   /* ---------- 事件：不再按时段/日期门控，本章之事皆可亲历 ---------- */
+  /* 当前章节中还没经历过的事件。filter 挑行 + includes 查“做过没有”，
+     是 JS 里查“剩余项”的惯用组合。 */
   eventsNow() {
     return EVENTS.filter(e => e.ch === G.ch && !G.doneEvents.includes(e.id));
   },
@@ -72,6 +118,9 @@ const Engine = {
     return EVENTS.filter(e => e.shard && !G.shards[e.shard] && !G.doneEvents.includes(e.id) && e.ch < G.ch);
   },
   /** 歇一日：日子推进，时段随机轮换（纯氛围） */
+  /* 过天结算：天数 +1、随机换时段（Math.floor(Math.random()*4) 取 0~3）、
+     清空“每日限一次”类状态、发 3 文生活费；
+     duelBanDays 是“马刀被没收”的剩余天数，减到 0 时 toast 报喜还刀。 */
   nextDay() {
     G.day++;
     G.periodIdx = Math.floor(Math.random() * 4);
@@ -87,6 +136,8 @@ const Engine = {
 
   /* ---------- 资源 ---------- */
   /** 自由开放世界：行动点不再是探索门禁。保留接口以免改动所有调用点。 */
+  /* 四个“加资源”函数都走同一套路：先 clamp 夹进合法区间，再让 HUD 数字跳一下。
+     addMoney 攒到 40 顺手解锁“家有余粮”成就。 */
   spendAP() { return true; },
   addWen(n) { G.wen = clamp(G.wen + n, 0, 100); UI.bump('wen'); },
   addRep(n) { G.rep = clamp(G.rep + n, 0, 100); UI.bump('rep'); },
@@ -94,8 +145,11 @@ const Engine = {
     G.money = clamp(G.money + n, 0, 99); UI.bump('money');
     if (G.money >= 40) this.award('ach_rich');
   },
+  /* 好感读档：没记录就当 0（|| 给默认值是 JS 处理“可能不存在”的惯用法）。 */
   favorOf(id) { return G.favor[id] || 0; },
+  /* 静默版：只改数值不弹提示，供批量结算用。 */
   addFavorQuiet(id, n) { G.favor[id] = clamp(this.favorOf(id) + n, 0, 100); },
+  /* 带提示版：弹出“某人称 好感 ±n”的 toast，文案优先称号（hao）再退回本名。 */
   addFavor(id, n) {
     G.favor[id] = clamp(this.favorOf(id) + n, 0, 100);
     const p = PEOPLE_BY_ID[id];
@@ -104,6 +158,9 @@ const Engine = {
   },
 
   /* ---------- 史料 ---------- */
+  /* 史料收集：!!x 把任意值转成 true/false。grantShard 记录来源并定文笔值：
+     打听来的转述版（gossip）文笔 -1，亲历/采访拿全值；
+     同一条史料不可重复获得（已有时返回 false）。 */
   hasShard(id) { return !!G.shards[id]; },
   grantShard(id, src) {
     if (!id || G.shards[id]) return false;
@@ -118,6 +175,8 @@ const Engine = {
 
   /* ---------- 风险：被逮（自由世界：只与地点有关，不再限时段） ---------- */
   /** 在教学楼内行动，偶遇巡查。返回是否触发了巡查 */
+  /* 风险掷骰：只在走廊/教室/办公室等“教学楼内”场景，9% 概率触发；
+     每天至多一次（G.caughtToday 当天标记，nextDay 时清零）。 */
   riskCheck() {
     if (G.caughtToday) return false;
     if (!['corridor', 'classroom6', 'classroom7', 'office'].includes(World.sceneId)) return false;
@@ -125,6 +184,10 @@ const Engine = {
     G.caughtToday = true;
     return true;
   },
+  /* 被逮后的教学小剧场：播放一段带选项的对话。三个选项成功率
+     50% / 65% / 80%，选项的 run() 里用 Math.random() 掷骰决定走向，
+     失败扣声望甚至“通报电子班牌”（解锁 ach_caught 成就）。
+     onDone 原样传给 Dialog.play——对话结束后由调用方继续自己的流程。 */
   caughtPlay(onDone) {
     G.stats.caught++;
     Dialog.play([
@@ -148,6 +211,8 @@ const Engine = {
   },
 
   /* ---------- 成就 ---------- */
+  /* 发成就：G.ach 里记一笔（已有就直接返回，保证幂等——重复触发不重复弹），
+     从成就表查出名字弹 toast、播解锁音效并立刻写存档。 */
   award(id) {
     if (G.ach[id]) return;
     G.ach[id] = 1;
@@ -159,6 +224,8 @@ const Engine = {
 };
 
 /* ============ 成就表 ============ */
+/* 成就的“户口表”：每个 id 与代码里某处 Engine.award(id) 的调用点一一对应；
+   icon 是 emoji 直接进 UI。渲染成就墙时整表遍历，有没有解锁看 G.ach。 */
 const ACHIEVEMENTS = [
   { id:'ach_start',   name:'开卷',      icon:'📖', desc:'完成序章，决定重写史记。' },
   { id:'ach_shuban',  name:'吾名为贾瀚元', icon:'🪶', desc:'亲历搬书问答。' },

@@ -3,13 +3,33 @@
  * 序章 / 终章 / 十六卷对话剧 / 战中触发台词
  * 台词多取《实验史记》原文，稍加剪裁。
  * ============================================================ */
+/* ============================================================
+ * 【新手导读】
+ * 【这个文件是干嘛的】纯数据的"台词卷"：序章/终章两段独白 + 25 个
+ *   关卡（十五卷主线及"其二"支线）各自的战前 intro、胜利 victory、
+ *   战败 defeat 对话，以及战中的 triggers 小剧场台词。整个文件几乎
+ *   没有逻辑，全是字符串数组——改剧情只动文字，不会玩坏程序。
+ * 【架构位置】battle 层，index.html 正常加载。世界侧 js/main.js 开战时
+ *   用 SCENE_OF_CHAR 表把角色 id 映射到关卡 id，自动把对应剧本挂进战斗
+ *   配置（首次约战某角色即挂上他的"卷"）；js/battle-ui.js 则在开打与
+ *   结算时按关卡 id 来这里取 intro / victory / defeat 播放。
+ * 【暴露的全局名】window.SJI_SCENES = { speakers, prologue, epilogue, stages }。
+ * 【新手阅读提示】每条台词是二元数组 [说话人key, 文本]，如 ["史", "……"]。
+ *   说话人 key 先查 speakers 表（目前只登记了「史」），查不到再查角色表，
+ *   最后按灰色默认头像兜底、名字直接显示 key 本身。stages 的键对应
+ *   data.js 里 STAGES 的关卡 id（s0…s15、s1b…s15b），两边改 id 要同步。
+ * ============================================================ */
 window.SJI_SCENES = (function () {
   "use strict";
 
+  /* 说话人登记表：key -> { name 显示名, glyph 头像字, color 主题色 }。
+     台词里其余说话人（「震」「大哥」「上」…）没有登记，界面按默认
+     灰头像显示，名字用 key 原文。 */
   const speakers = {
     "史": { name: "音克思", glyph: "史", color: "#a63a2b" }
   };
 
+  /* 序章独白。数组的一项就是一句台词，播放器逐条展示、点击翻页。 */
   const prologue = [
     ["史", "两年了。清理文件的时候，我又翻到了这部《实验史记》。"],
     ["史", "时间真不愧是世界上最强大的东西。若不是这几天整理文件，我都快忘了它。"],
@@ -21,6 +41,7 @@ window.SJI_SCENES = (function () {
     ["史", "那么——在这里，重开重开。"]
   ];
 
+  /* 终章独白（原版遗留 UI 在通关卷十五 s15 胜利后播；现役 battle-ui.js 暂未接线）。 */
   const epilogue = [
     ["史", "至此，十五卷成。"],
     ["史", "后来，我把纸质版打成电子版，打到手酸——电子版终究只有纸质版的三分之二。"],
@@ -33,7 +54,16 @@ window.SJI_SCENES = (function () {
     ["史", "（实验史记 · 终）"]
   ];
 
+  /* 关卡剧本表：键 = data.js STAGES 的关卡 id。每关可含：
+     intro / victory / defeat —— 战前、胜利、败北对话（[说话人, 台词] 数组）；
+     triggers —— 战中触发台词，when 取值：
+       waveStart  第 wave 波敌人入场时      roundStart  第 round 回合开始时
+       playerLow  玩家濒危时               enemyLow    指定 char 的敌人濒危时
+       enemyDown  指定 char（或 "any"）的敌人被击倒时
+     （触发时机由对话层满足条件时插播；现役 battle-ui.js 只播 intro/victory/
+      defeat，triggers 目前只有遗留的 battle/ui.js 会消费，属预留数据。） */
   const stages = {
+    // 第一战（序章教学）：intro 借万震之口把马刀规则完整讲了一遍。
     s0: {
       intro: [
         ["震", "……汝来做什么。"],
@@ -59,6 +89,7 @@ window.SJI_SCENES = (function () {
         ["大哥", "尔搬何书？——吾名为贾瀚元！"],
         ["史", "高二时我对大哥的印象极深，事件也典型——第一卷，自然从大哥写起。"]
       ],
+      // triggers 示例：第 2 波神人入场时插播两句话（when + wave 指定时机）。
       triggers: [
         { when: "waveStart", wave: 2, lines: [
           ["神人", "悲夫！吾当一人任所有班委之职，吾不忍他人无职可任——"],
@@ -105,6 +136,7 @@ window.SJI_SCENES = (function () {
         ["史", "绍铭仪表堂堂，歆慧貌美晔丽。二人比邻，情比金坚，伤害+1——先分其阵，再破其阵。"]
       ],
       triggers: [
+        // char 填角色 id，指定"谁的"血线触发。
         { when: "enemyLow", char: "shaoming", lines: [["铭", "怎能不悔也！"]] }
       ],
       victory: [
@@ -317,6 +349,7 @@ window.SJI_SCENES = (function () {
         ["史", "乱世用重典。唯一人，可终结此局。"]
       ],
       triggers: [
+        // char: "any" —— 任意一名敌人被击倒都触发。
         { when: "enemyDown", char: "any", lines: [["史", "向所谓终身之好者，亦不过一时之心。然当其时也，喜怒皆真。"]] }
       ],
       victory: [
@@ -437,5 +470,6 @@ window.SJI_SCENES = (function () {
     },
   };
 
+  // 对外公开的四样：头像表、两段独白、关卡剧本字典。
   return { speakers, prologue, epilogue, stages };
 })();

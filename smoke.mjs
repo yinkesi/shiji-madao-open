@@ -1,10 +1,45 @@
 /* 实验史记·马刀行 —— M1 冒烟测试：世界→约战→马刀对决→结算回世界
  * 用法：node smoke.mjs（需 playwright；截图入 testshots/ 供视觉验收） */
+// ================================================================
+// 【这个文件是干嘛的】
+// 冒烟测试（smoke test）：点一把火，看整台机器"冒不冒烟"——
+// 用一次真实游玩把游戏从头到尾跑一遍：开新档 → 约战 → 战斗 →
+// 结算回世界 → 锦标赛/生存/试炼，几十个断言逐项核对结果，并截图
+// 存进 testshots/ 供人工目检。
+//
+// 【Playwright 是什么】
+// 一个"遥控真浏览器"的自动化测试库：chromium.launch() 启动一个
+// 无头（不弹窗口）的 Chrome；page.goto() 打开页面；page.click() /
+// page.keyboard.press() 模拟真人点击与按键；page.evaluate(fn) 把
+// 一个函数"送进"网页里执行并拿回返回值——相当于在浏览器控制台里
+// 跑代码，是测试读取游戏内部状态（window.G、World.active、
+// Dialog.active 等）的窗口。
+//
+// 【断言什么】
+// check(名字, 条件) 是自制的最简断言：条件为真打 PASS、为假打
+// FAIL 并计数，结尾汇总。跑法：
+//   node smoke.mjs                      测源码版 index.html
+//   node smoke.mjs 实验史记·马刀行.html   测打包后的单文件版
+// （需 NODE_PATH 指向装有 playwright 的 node_modules。）
+//
+// 【新手阅读提示】
+// 1) 等页面一律用下面自制的 waitFor 轮询"状态是否成立"，不靠固定
+//    sleep 硬等——动画时长是魔数，睡 700ms 时好时坏；轮询到条件
+//    成立才往下走，稳定得多。
+// 2) 浏览器里的页面错误、控制台报错都会被开头的两个 page.on(...)
+//    监听抓进 errors，只要非空，整个测试最后判失败。
+// ================================================================
 import { chromium } from 'playwright';
 import { pathToFileURL } from 'url';
 import path from 'path';
 import fs from 'fs';
 
+// ---------- 测试环境搭建 ----------
+// ROOT：本文件所在目录（import.meta.url 是 file:// 形式的地址，
+// 先把路径部分还原成普通路径，再兼容 Windows 的 C: 盘前缀）。
+// HTML：要测的页面，默认源码版 index.html，也可用命令行第 2 个
+// 参数指定打包版；testshots/ 是截图目录，不存在就递归创建。
+// errors 收集浏览器里的一切报错，最后统一清算。
 const ROOT = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const HTML = path.join(ROOT, process.argv[2] || 'index.html');   // 可传打包后的单文件路径
 const OUT = path.join(ROOT, 'testshots');
@@ -16,6 +51,7 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 page.on('pageerror', e => { errors.push('PAGEERROR: ' + e.message); console.log('  [页面错误] ' + e.message); });
 page.on('console', m => { if (m.type() === 'error') { errors.push('CONSOLE: ' + m.text()); console.log('  [控制台错误] ' + m.text()); } });
 
+// check：自制断言器。extra 可选，失败时把现场数据附在括号里打出来。
 let fails = 0;
 const check = (name, cond, extra) => {
   console.log(`  ${cond ? 'PASS' : 'FAIL'}  ${name}${extra !== undefined ? '  (' + extra + ')' : ''}`);
@@ -45,10 +81,16 @@ const waitFor = async (fn, tries = 30, gap = 150) => {
   return false;
 };
 
+// ---------- 正式开测 ----------
+// 用 file:// 协议直接打开本地 HTML（不经任何服务器），给它 800ms
+// 完成初始化，截下第一张图：标题页。
 await page.goto(pathToFileURL(HTML).href);
 await page.waitForTimeout(800);
 await page.screenshot({ path: `${OUT}/m1-01-title.png` });
 
+// 开演前点名：page.evaluate 检查各模块的全局名是否全部就位
+// （SJI_ENGINE 引擎 / SJI_DATA 数据 / SJI_UI 界面 / World 世界 /
+// Main 主流程），以及人物数据里注册了音克思这张战斗卡。
 // ===== 1. 全局装配检查 =====
 const assembled = await page.evaluate(() => ({
   engine: !!window.SJI_ENGINE, data: !!window.SJI_DATA, ui: !!window.SJI_UI,
@@ -61,6 +103,10 @@ check('世界与主流程装配', assembled.world && assembled.main);
 check('音克思战斗卡已注册', assembled.yinkesi);
 
 // ===== 2. 新开一局：先择难度 → 开局即主线 =====
+// 点「开卷」应先弹出难度面板（五张卡）；脚本替我们选「困难」档，
+// 然后逐项核对：难度写进战斗层设置、世界画布激活、开局即有主线
+// （任务卡文案含「初执马刀」、HUD 显示 0/9、世界上有 m1 的「令」
+// 标记），且出生点就在主线所在的操场。
 await page.click('#btn-new');
 await page.waitForTimeout(600);
 const diffPanel = await page.evaluate(() => ({
@@ -91,6 +137,10 @@ check('开局落在主线首节所在地（操场）', await page.evaluate(() =>
 await page.screenshot({ path: `${OUT}/m1-02-world.png` });
 
 // ===== 3. 约战歆慧（图书馆有她）=====
+// 先打开 SJI_DEBUG.autoRps 调试开关（战斗里的猜拳自动出，免得
+// 测试卡在弹层），再传送去图书馆。challenge() 在距离远时会先寻路
+// 走近，所以循环多试几次直到对话弹出；点完战前斗嘴，战场覆盖层
+// 应打开，且我方是音克思、敌军里有歆慧。
 await page.evaluate(() => {
   window.SJI_DEBUG.autoRps = true;           // 自动猜拳
   World.travel('library');
@@ -121,6 +171,9 @@ for (let i = 0; i < 14; i++) { await page.keyboard.press('Space'); await page.wa
 await page.screenshot({ path: `${OUT}/m1-04-battle.png` });
 
 // ===== 4. 天降正义 + 结束回合 → 胜利 =====
+// SJI_DEBUG.killEnemies() 是调试作弊"天降正义"：清空敌军。随后
+// 按空格结束玩家回合，引擎推进到结算页，应判胜；胜场计数 +1，
+// 歆慧的技能录入刀谱。
 await page.waitForTimeout(2200);   // 等猜拳动画走完、进入玩家阶段
 await page.evaluate(() => window.SJI_DEBUG.killEnemies());
 for (let i = 0; i < 10; i++) {
@@ -138,12 +191,14 @@ check('歆慧之技录入刀谱', rewards.card === true);
 await page.screenshot({ path: `${OUT}/m1-05-result.png` });
 
 // ===== 5. 回校园，世界恢复 =====
+// 点结算页的离场按钮（#r-menu）：战场覆盖层应关闭、世界重新可操作。
 await page.click('#r-menu');
 await page.waitForTimeout(700);
 check('覆盖层关闭，回到校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active && !document.querySelector('#battle').classList.contains('on')));
 await page.screenshot({ path: `${OUT}/m1-06-back-to-world.png` });
 
 // ===== 6. 刀谱面板 =====
+// 调 Main.panelBlades() 打开刀谱抽屉，确认 #panel 可见后再关掉。
 await page.evaluate(() => Main.panelBlades());
 await page.waitForTimeout(600);
 check('刀谱面板可开', await page.evaluate(() => !document.querySelector('#panel').classList.contains('hidden')));
@@ -152,6 +207,11 @@ await page.click('#panel-close');
 await page.waitForTimeout(400);
 
 // ===== 7. M2：立传已与主线解耦（原「成传战门禁」改为软提示） =====
+// 这一段验证"没打赢传主也能开卷立传"：Writing.duelReady 恒为真，
+// 卷目面板只显示「不影响立传」的软提示；再模拟把大哥的卡发下来
+// （Blades.grant + 存档），duelWon 应回头转真，且 HUD 段位章显示
+// 真实段位。7e 若汶斌还是"生人"，则真刀真枪约他打一场，验证首战
+// 会挂上卷五的战前剧本（cfg.introScene 存在）并能正常打完结算。
 const cfgProbe = await page.evaluate(() => typeof Main.challenge === 'function');
 check('challenge 可调用', cfgProbe);
 // 7b. 未胜传主时仍可开卷撰写（门禁已撤下），但面板会软提示
@@ -220,6 +280,12 @@ if (sceneAttach === 'fresh') {
 }
 
 // ===== 7f. 主线任务端到端：接战 → 胜 → 赏格随难度 → 推进到下一节 =====
+// 最重的一段端到端链路：走近 m1 的「令」标记触发接战对话（须是
+// m1 专属台词而非通用句），开战配置带 questId=m1；"天降正义"
+// 取胜后：任务记为完成、自动推进到 m2、章节 ch 0→1；赏格按之前
+// 选的困难难度 ×1.3 结算（8→10，另加胜场例行 +3，共 +13）。
+// 回到世界后先弹章节里程碑卡、再自动播 m1 专属的战后收束一幕；
+// 最后任务卡应刷新为 m2「实验三异能者」、HUD 进度 1/9。
 const m1state = await page.evaluate(() => {
   const q = Quests.current();
   return { id: q.id, name: q.name, where: q.where, ch: G.ch };
@@ -291,6 +357,12 @@ check('任务卡自动刷新为下一节「实验三异能者」', qcardNext.inc
 check('任务卡主线进度刷新为 1/9', await page.evaluate(() => document.querySelector('#hud-ap-v').textContent === '1/9'));
 
 // ===== 8. M3：协会锦标赛（三连战）+ 生存模式 =====
+// 用调试手段把章节直接推到卷九、立起协会，操场空地就应出现
+// 「协会锦标赛 / 生存」两个入口按钮。锦标赛是三波连战：逐波
+// "天降正义"并在玩家阶段按空格推进回合，赢下后三位委员的卡应
+// 全部入册、拿到冠军成就。生存模式打完第一波后应弹出波间增益
+// 三选一弹层（.boon-b 按钮），选完进入第二波；最后故意调
+// finish('lose') 认输收场，确认也能正常回到校园。
 await page.evaluate(() => {
   while (G.ch < 9) Engine.nextChapter();     // 卷九
   G.flags.xiehui = true;                     // 协会已立
@@ -370,6 +442,10 @@ await page.waitForTimeout(700);
 check('生存后回校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));
 
 // ===== 9. 白板开局 + 修炼 + 高难试炼 =====
+// 9b 白板基线：无养成数值时基础血应为 10（身怀 innate「大腹如斗」
+// 会 +10，按当前装备的天赋折算进期望值）。9c 高难试炼：解锁
+// "九省联考"试炼并强制困难开打，首通应记入 trialDone、发放
+// 稀有刀卡「以道代血」。
 // 9a. 白板：新档初始无技（此处进度已非白板，仅验注册表逻辑成立）
 const blank = await page.evaluate(() => {
   const old = JSON.stringify(JSON.parse(localStorage.getItem('shiji_cqb_v1') || '{}'));
@@ -414,6 +490,9 @@ await page.waitForTimeout(700);
 check('试炼后回校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));
 
 // ===== 结果 =====
+// ---------- 收尾 ----------
+// 汇报浏览器报错与断言失败数；进程退出码 = 失败项数（0 即全过），
+// 有页面错误则直接退出码 1——CI 环境就靠这个判断测试过没过。
 console.log(errors.length ? '\n页面错误:\n' + errors.join('\n') : '\n无页面错误');
 console.log(fails === 0 ? '\n=== M1 SMOKE ALL PASS ===' : `\n!! ${fails} 项失败`);
 await browser.close();

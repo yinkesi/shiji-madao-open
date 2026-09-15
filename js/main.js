@@ -1,8 +1,57 @@
 /* 实验史记·春秋笔 —— 主线流程：章节 / 交互 / 晚自习 / 终章 */
 'use strict';
 
+/* ================================================================
+   【这个文件是干嘛的】
+   全游戏的“总指挥”（融合层·流程编排）：把前面所有模块拧在一起，
+   负责玩家看得见的每一段流程——开卷选难度开局、世界交互条
+   （交谈/赠礼/采访/约战按钮）、主线支线约战入口 Main.onQuest
+   （战前先播 pre 剧情，再调 window.SJI_UI.startBattle(cfg) 开战）、
+   战斗结算钩子 window.SJI_BATTLE_HOOKS.onResult(b)、打完回世界的
+   onDone()（先弹章节里程碑卡 Engine.takePendingChapter()，再播战后
+   一幕 Quests.takePendingPost()，两者成对消费不串场）、协会锦标赛
+   三连胜、高难试炼、“刀禁期”风险，以及终章（高考·毕业·AI 读史）。
+
+   【架构位置】
+   index.html 按固定顺序加载 22 个 <script>，本文件排在最后——
+   因为它依赖前面所有人（Engine/World/Dialog/UI/Blades/Quests/
+   SJI_UI/Save/Sfx/MG…都是前面文件定义的顶层全局名）。文件之间
+   不 import 不 export，全靠“大家共用同一个全局作用域、互相喊名字”
+   通信。
+
+   【暴露的全局名】
+   对外只暴露一个：const Main（下面 IIFE 返回的对象，含 boot/onQuest/
+   challenge/finale/rest 等入口）。另外往 window 挂了一个
+   SJI_BATTLE_HOOKS（onResult/onDone），专供战斗层 battle-ui.js 回调。
+
+   【新手阅读提示】
+   1) 读懂全项目的钥匙是“一次约战的完整旅程”：
+      玩家点「来呀来呀·约战」→ updateCtx 造按钮、challenge(p) 接单
+      → knifeBanRiskOk 过刀禁期检查 → Dialog 播战前台词 →
+      duelCfg(p) 组装配置 → SJI_UI.startBattle(cfg) 进入战斗覆盖层
+      → 引擎打完调 window.SJI_BATTLE_HOOKS.onResult(b) 结算奖励
+      → onDone() 回世界（先弹里程碑卡、再播战后一幕）。
+      顺着这条线读，整个项目就通了。
+   2) 跨文件大坑：顶层 `const X = ...` 不挂 window！所有 <script>
+      共享全局词法作用域，裸名 X 跨文件能访问；但查 window.X 得到
+      undefined。所以代码里到处是 `window.SJI_SAVE && ...`、
+      `typeof X !== 'undefined'` 这类“判活”写法——先确认对方文件
+      真的加载了，再动手。
+   3) window.G 是有意挂 window 的“全局账本”（战斗层只认 window.G）。
+      本文件在开新档/读档时对它整体赋值（G = newGameState() 或读档）。
+   4) 战场参数（hpScale 敌方血量倍率 / restFull 波次间回满血 /
+      blocked 障碍格 / terrain 地形）必须放进 cfg.stage 子对象，
+      战斗引擎只读 cfg.stage，放顶层无效。
+   5) Main 是 IIFE（立即执行函数表达式）：(() => { ... })() 定义完
+      马上执行一次；return 出去的名字是公开接口，其余函数全封在
+      闭包里当私有品——类似 Python 模块里“下划线开头”的约定。
+   ================================================================ */
 const Main = (() => {
   /* ---------- 存档兼容：补齐马刀行新增字段 ---------- */
+  /* 给读进来的旧档“打补丁”：老版本存档缺新字段就补默认值，
+     免得后面代码摸到 undefined 报错。`G.wins == null` 用两个等号只判
+     null/undefined 两种“没有”——数值 0 能顺利通过，是 JS 判
+     “存没存过”的惯用法（若用三个等号连 0 也会被当成“没存过”）。 */
   function normalizeG() {
     if (G.wins == null) G.wins = 0;
     if (G.duelsLost == null) G.duelsLost = 0;
@@ -22,24 +71,38 @@ const Main = (() => {
     Engine.syncChapter();
     Engine.syncWorldFlags();
     /* 老档补发：已完成支线对应的身怀之技（一次性静默补齐，toast 汇总） */
+    /* window.Quests && ...：先判活再调用——Quests 若没加载，
+       短路求值会让整行安静跳过而不是抛 ReferenceError */
     if (window.Quests && Quests.migrateInnates) Quests.migrateInnates();
   }
 
   /* ---------- 任务：接战 / 完成回流 ---------- */
+  /* 主线/支线约战的统一入口——约战旅程的第一站。
+     套路是“没走近就先走过去”：离任务点太远就下发走路指令并 return
+     （本次调用到此为止），等世界层发现玩家走近了，会再次回调进来。 */
   function onQuest(q) {
+    /* 战斗还没打完（BATTLE_ACTIVE 旗子由 battle-ui 开战时立起）不接新单 */
     if (!q || window.BATTLE_ACTIVE) return;
     if (Dialog.active) Dialog.forceFinish();   // 清掉残留对话（战后幕等）
     /* 任务点可能因同场景重叠而错位显示，取显示位置走近 */
+    /* some() 是数组的“有没有一个满足”判断（近似 Python 的 any()） */
     const onMap = Quests.markers().some(m => m.q.id === q.id);
     const pos = onMap ? Quests.walkPosOf(q.id) : [q.pos[0], q.pos[1]];
     const [px, py] = World.playerPos;
+    /* Math.hypot 按勾股定理算两点直线距离；超过 90 像素算“还没走近” */
     if (Math.hypot(pos[0] - px, pos[1] - py) > 90) { World.walkTo(pos[0], pos[1] + 40); return; }
     const isMain = Quests.current() && Quests.current().id === q.id;
     /* 专属战前剧情；缺数据时退回通用脚本 */
+    /* || 在此当“取不到就用备胎” */
     const script = Quests.preScript(q) || Quests.fallbackPre(q, isMain);
+    /* Dialog.play 的第二个参数是“播完后的回调”：把接下来要做的事打包成
+       函数递过去，剧情播完由 Dialog 调用——JS 编排异步流程的经典手法 */
     Dialog.play(script, () => Quests.pickAndStart(q));
   }
 
+  /* 「任务」面板：主线九节与各条支线渲染成卡片列表。
+     el() 是 config.js 提供的造元素小工具：el('div', 'card', html)
+     即建一个 class="card"、内容为 html 的 <div>；body 是面板内容容器。 */
   function panelQuests() {
     UI.openPanel('任务 · 马刀行', body => {
       const cur = Quests.current();
@@ -48,6 +111,7 @@ const Main = (() => {
         <div class="meta">${mul.tip}　·　可在「系统 · 设置」中随时更改</div>`));
       body.appendChild(el('div', 'muted', '<div style="height:10px"></div>主线 · 马刀兴亡史（每节皆高难关卡）：'));
       Quests.mainList().forEach(q => {
+        /* q.need 是可选的解锁条件函数：任务没写 need 就默认开放 */
         const done = Quests.done(q.id); const open = q.need ? q.need() : true;
         const c = el('div', 'card');
         c.style.cssText = 'display:flex;align-items:center;gap:12px;opacity:' + (open ? 1 : 0.5);
@@ -56,12 +120,15 @@ const Main = (() => {
         const b = el('button', 'btn' + (open && !done ? ' btn-primary' : ''), done ? '已成' : '前往');
         b.style.padding = '7px 13px';
         if (done) b.disabled = true;
+        /* 关面板 → 必要时切场景 → 等 150ms 再触发 onQuest（给场景切换
+           留时间；人还没走到任务点，onQuest 会自己先带路） */
         else b.onclick = () => { UI.closePanel(); const sc = SCENE_BY_ID[q.where]; if (World.sceneId !== q.where) World.travel(q.where); setTimeout(() => onQuest(q), 150); };
         c.appendChild(b);
         body.appendChild(c);
       });
       body.appendChild(el('div', 'muted', '<div style="height:12px"></div>支线 · 满足条件可接（完成即解锁强力人物或永久效果）：'));
       Quests.sideList().forEach(q => {
+        /* 支线开放与否由 cond() 现场判定（好感/胜场/记录等条件） */
         const done = Quests.done(q.id); const open = q.cond();
         const c = el('div', 'card');
         c.style.cssText = 'display:flex;align-items:center;gap:12px;opacity:' + (open ? 1 : 0.5);
@@ -96,15 +163,23 @@ const Main = (() => {
     },
   };
 
+  /* 读玩家在设置里选的难度（存放在战斗层自己的存档 window.SJI_SAVE，
+     不占用 G）。`(window.SJI_SAVE && SJI_SAVE.settings.lastDiff) || 'normal'`
+     一行两层保险：SJI_SAVE 存在才取字段，取不到就兜底 normal。 */
   function duelDiff() {
     const d = (window.SJI_SAVE && SJI_SAVE.settings.lastDiff) || 'normal';
     return ['easy', 'normal', 'hard', 'extreme'].includes(d) ? d : 'normal';
   }
 
+  /* 组装一场约战的配置 cfg（约战旅程的“行李单”）：敌人、难度、AI 攻性
+     放顶层；战场参数（hpScale 敌方血量倍率 / restFull 波次回血 /
+     blocked 障碍格 / terrain 地形）必须放 cfg.stage 子对象——引擎只读它。
+     opts 允许调用方覆盖默认项，`opts || {}` 防止没传时 assign 出错。 */
   function duelCfg(p, opts) {
     Blades.registerChar();
     const id = p.id;
     const sp = DUEL_SPECIAL[id];
+    /* first：刀谱里还没有此人的卡 = 从没赢过他 = 首战 */
     const first = !Blades.hasCard(id);
     const cfg = Object.assign({
       mode: 'story',
@@ -115,6 +190,8 @@ const Main = (() => {
       diff: duelDiff(),
       aiAggr: (window.SJI_SAVE && SJI_SAVE.settings.aiAggr) || 'active',
     }, opts || {});
+    /* 特殊战场（如终焉之战）整套照抄预设；普通首战则挂上角色所属
+       剧本卷的舞台，让开场地形呼应原关卡 */
     if (sp) {
       Object.assign(cfg, { enemies: sp.enemies, allies: sp.allies || [], stage: sp.stage, title: sp.title });
     } else if (first && window.SJI_SCENES) {
@@ -129,13 +206,18 @@ const Main = (() => {
 
   /* 刀禁期（G.ch ≥ 12，即主线「刀禁令风波」之后）：楼内约战可能被钦法连人带刀收缴。
      自由开放世界：只与地点有关，不再限时段。 */
+  /* onDecide 是“检查通过后再执行”的回调：把“接下来开战”这一步当参数
+     传进来，可能被直接放行、可能卷进风险剧情、也可能当场拒绝。 */
   function knifeBanRiskOk(onDecide) {
     if (G.ch < 12) { onDecide(); return; }
     if (G.flags.duelBanDays > 0) { toast(`刀具尚在钦法处（还押 ${G.flags.duelBanDays} 日），约战不得`, '禁'); return; }
     const safe = ['dorm', 'playground', 'gate', 'canteen'].includes(World.sceneId);
+    /* 安全场所随便打；其余地点掷骰——Math.random() > 0.25 即 75% 放行 */
     if (safe || Math.random() > 0.25) { onDecide(); return; }
     Dialog.play([
       { who: '钦法', text: '（从走廊尽头逼近）此何课也？尔等围于此，所为何物？' },
+      /* 选项里每个 run() 负责掷骰并返回后续旁白 {say:...}；
+         Math.random() < 0.55 即 55% 成功率（bad:true 标记坏结局） */
       { choice: [
         { t: '把马刀塞进袖口，佯装晨读', fx: '五五之数', run() {
             if (Math.random() < 0.55) return { say: { who: '旁白', text: '钦法扫了一眼，走了。刀柄上全是手汗。' } };
@@ -155,13 +237,19 @@ const Main = (() => {
         } },
       ] },
     ], () => {
+      /* 风险剧情播完才进这个回调：先落存档；刀被缴了这战就黄了，
+         否则才放行 onDecide */
       Save.write();
       if (G.flags.duelBanDays > 0) { afterAction(); return; }   // 刀被缴，这一战打不成了
       onDecide();
     });
   }
 
+  /* 世界里「来呀来呀 · 约战」按钮的实现（自由约战，区别于任务战）：
+     走近此人 → 播约战台词 → 选战前道具/文笔技 → 刀禁期检查 → 开战。
+     一路用回调把“下一步”层层递下去，是回调式流程编排的典型样貌。 */
   function challenge(p) {
+    /* 小游戏或战斗还没结束就不受理新约战 */
     if (MG.active || (window.BATTLE_ACTIVE)) return;
     if (Dialog.active) Dialog.forceFinish();   // 清掉残留对话（战后幕等），不再静默失效
     const pos = World.npcPos(p.id);
@@ -169,8 +257,10 @@ const Main = (() => {
       const [px, py] = World.playerPos;
       if (Math.hypot(pos[0] - px, pos[1] - py) > 80) { World.walkTo(pos[0], pos[1] - 50); return; }
     }
+    /* 战斗层的数据表 window.SJI_DATA.CHARACTERS 里没这个人 = 不会马刀 */
     if (!window.SJI_DATA.CHARACTERS[p.id]) { toast('此人不会马刀。', '刀'); return; }
     if ((G.flags.duelBanDays || 0) > 0) { toast(`刀具尚在钦法处（还押 ${G.flags.duelBanDays} 日），约战不得`, '禁'); return; }
+    /* p.chat 存在且非空才用作台词池，否则给一句万能台词兜底 */
     const pool = (p.chat && p.chat.length) ? p.chat : ['来呀来呀。'];
     const script = [
       { who: p.hao || p.name, text: pick(pool) },
@@ -198,17 +288,26 @@ const Main = (() => {
       run() { G.flags.duelWen = 'xi'; Save.write();
         return { say: { who: '旁白', text: '（笔扫千军，先声夺人。）' } }; },
     });
+    /* 有可选项就把它们连同「空手赴战」兜底项一起，作为选择题插进剧本 */
     if (choices.length) script.push({ choice: choices.concat([{ t: '空手赴战', fx: '来呀来呀', run() { return null; } }]) });
+    /* 台词播完 → 刀禁期检查放行 → SJI_UI.startBattle(cfg) 正式开战：
+       战斗覆盖层接管画面，打完按约定回调 window.SJI_BATTLE_HOOKS */
     Dialog.play(script, () => {
       knifeBanRiskOk(() => SJI_UI.startBattle(duelCfg(p)));
     });
   }
 
   /* 战斗结算钩子：奖励 / 录技 / 段位（供 battle-ui 调用） */
+  /* 挂到 window 上的“战斗结算钩子”，专供 battle-ui.js 按名回调：
+     打完一仗先调 onResult(b)（b 是战斗引擎回传的结果包：胜负/波次/
+     统计，以及当初传进去的 cfg），返回的 HTML 附在结算画面上；
+     玩家点“回到世界”再调 onDone() 收尾。 */
   window.SJI_BATTLE_HOOKS = {
     onResult(b) {
       const win = b.result === 'win';
+      /* 开打前先记下当前段位名，末尾比对，判断这一胜有没有带来晋阶 */
       const rankBefore = Blades.rankName();
+      /* extra：攒要显示在结算画面上的 HTML 片段，函数末尾整段返回 */
       let extra = '<div class="result-extra">';
       /* 生存模式：按波次结算 */
       if (b.mode === 'survival') {
@@ -227,6 +326,8 @@ const Main = (() => {
         G.wins++;
         const foes = b.cfg.enemies || [];
         const names = [];
+        /* 逐个敌方结算：Blades.grant 把败者之技录进刀谱（fresh=首次录技，
+           首录好感加得多），录过的人再胜只加少量好感 */
         foes.forEach(id => {
           const ch = window.SJI_DATA.CHARACTERS[id];
           if (!ch) return;
@@ -256,6 +357,8 @@ const Main = (() => {
           extra += `<div><b>试炼首通！</b>「${t.name}」授稀有刀卡「${rw.name}」：${rw.desc}（每场常驻生效）</div>
             <div>另声望 +3 · 零花钱 +30。</div>`;
         }
+        /* 锦标赛收官局（cfg.tournament 标志位）：胜即一次性把三位对手
+           之技全录进刀谱、发三连赏、授冠军成就 */
         if (b.cfg.tournament) {
           ['luhao', 'xiaochuan', 'zichen'].forEach(id => Blades.grant(id));
           Engine.addRep(4); Engine.addMoney(10);
@@ -264,6 +367,7 @@ const Main = (() => {
             <div class="yueks">音克思曰：马刀大兴盛，汝今列席协会，与有荣焉。</div>`;
         } else {
           extra += `<div>胜${names.length > 1 ? '众刀手' : '「' + names[0] + '」'}，其名其技录入刀谱。好感与声望各有进益。</div>`;
+          /* 段位名和开打前不一样 = 晋阶了（段位只表战绩，无属性加成） */
           const rankNow = Blades.rankName();
           if (rankNow !== rankBefore) {
             toast(`刀道晋阶：「${rankNow}」`, '晋');
@@ -273,6 +377,8 @@ const Main = (() => {
           }
         }
       } else {
+        /* 败仗：记败场、掉对方 1 点好感；若是任务战则把战败后的
+           一小段剧情“寄存”起来，等回世界再播（见下面的 onDone） */
         G.duelsLost++;
         const foeId = (b.cfg.enemies || [])[0];
         const ch = foeId && window.SJI_DATA.CHARACTERS[foeId];
@@ -289,6 +395,9 @@ const Main = (() => {
       Save.write();
       return extra;
     },
+    /* 战斗收尾、回到世界：afterAction 刷新界面并存档。之后按固定顺序
+       “成对消费”两样待办——先取章节里程碑卡、再播战后收束一幕；
+       takePending 都是“取走即清空”，取过一次就没有了，不会串场。 */
     onDone() {
       afterAction();
       World.refresh();
@@ -298,6 +407,9 @@ const Main = (() => {
         if (!post) return;
         Dialog.play(post, () => { UI.updateHUD(); Quests.render(); Save.write(); });
       };
+      /* takePendingChapter 返回待弹的章节号（没有则 null）；有卡就先弹卡，
+         把 playPost 挂成“卡片关闭后”的回调——回调套回调，保证先后顺序。
+         `!= null` 会同时排除 null 和 undefined 两种“没有”。 */
       const ch = Engine.takePendingChapter();
       if (ch != null && CHAPTERS[ch]) {
         showChapterCard(CHAPTERS[ch], () => {
@@ -308,6 +420,8 @@ const Main = (() => {
   };
 
   /* ---------- 刀谱面板 ---------- */
+  /* 「刀谱」面板：称号战绩、身怀之技（支线永久被动）、稀有刀卡
+     （试炼首通所授）、已录技列表与换技按钮，每次打开现查现画。 */
   function panelBlades() {
     Blades.registerChar();
     UI.openPanel('刀谱 · 马刀行', body => {
@@ -360,6 +474,7 @@ const Main = (() => {
         const b = el('button', 'btn' + (eqId === id ? ' btn-primary' : ''), eqId === id ? '出战中' : (sk ? '换此技' : '不可选'));
         b.style.padding = '8px 14px';
         if (!sk || eqId === id) b.disabled = true;
+        /* 换技后关面板再重开本面板——用“整个重画一遍”来刷新界面 */
         else b.onclick = () => { Blades.equip(id); toast(`已换技：「${sk.name}」`, '谱'); UI.closePanel(); panelBlades(); };
         c.appendChild(b);
         body.appendChild(c);
@@ -381,6 +496,8 @@ const Main = (() => {
           <div class="meta">${d.tip}</div></div>`;
         const b = el('button', 'btn' + (d.v === cur ? ' btn-primary' : ''), d.v === cur ? '按此开卷' : '选此');
         b.style.padding = '8px 16px';
+        /* stopPropagation()：点了按钮就别让这次点击“冒泡”到整张卡片的
+           onclick——否则一次点击会触发两遍开新档 */
         b.onclick = e => { e.stopPropagation(); beginNewGame(d.v); };
         c.appendChild(b);
         c.onclick = () => beginNewGame(d.v);
@@ -389,6 +506,8 @@ const Main = (() => {
       body.appendChild(el('div', 'muted', '<div style="height:12px"></div>开卷后：世界自由来去；主线指引在右侧任务卡；走近「令」标记即可开战。'));
     });
   }
+  /* 开新档：记难度 → 造全新账本并打兼容补丁 → 发“开局”成就并存档 →
+     进序章。`G = newGameState()` 是对全局账本 window.G 的整体换新。 */
   function beginNewGame(diffV) {
     if (window.SJI_SAVE && SJI_SAVE.setSetting) SJI_SAVE.setSetting('lastDiff', diffV);
     UI.closePanel();
@@ -397,9 +516,13 @@ const Main = (() => {
     startChapter(true);
   }
 
+  /* 给标题页三个按钮绑 onclick（“点击就调这个函数”的直白写法）：
+     新开卷 / 继续上局 / 粘贴文本导入存档。 */
   function bindTitle() {
     $('#btn-new').onclick = () => { Sfx.tap(); pickDifficulty(); };
     $('#btn-continue').onclick = () => {
+      /* 读档 = 从 localStorage 取回账本整体赋给 G（换账本即回到进度），
+         再打一遍兼容补丁 */
       const s = Save.read();
       if (!s) { toast('还没有存档'); return; }
       G = s; normalizeG(); Sfx.tap();
@@ -409,6 +532,7 @@ const Main = (() => {
       World.enter(G.flags.lastScene || 'playground');
       enterPeriod(false);
       toast('继续上局', '史');
+      /* 老档迁移提示只弹一次：弹完立刻清掉旗子并存档，下次读档不再弹 */
       if (G.flags.legacyMigrated) {
         G.flags.legacyMigrated = false; Save.write();
         setTimeout(() => toast('旧档已并入刀史：主线九节从头接起，此前的胜场、刀谱与进度皆保留', '迁'), 900);
@@ -421,17 +545,23 @@ const Main = (() => {
         const b = el('button', 'btn btn-primary', '导入');
         b.style.marginTop = '8px';
         b.onclick = () => {
+          /* try/catch：导入文本不合法时 Save.import 会抛异常，
+             这里接住弹个提示，页面不至于直接崩掉 */
           try { Save.import(ta.value); location.reload(); }
           catch (e) { toast('存档格式不对'); }
         };
         body.appendChild(b);
       });
     };
+    /* !!（两个非号）把任意值压成 true/false：有存档才显示「继续上局」 */
     const has = !!Save.read();
     $('#btn-continue').classList.toggle('hidden', !has);
   }
 
   /* ---------- 章节卡 ---------- */
+  /* 全屏章节里程碑卡：填内容 → 显示 → 点一下或定时自动关闭。
+     fired 旗子保证 done 只跑一次（手动点击与定时器谁先到谁生效）；
+     `cb && cb()` 是“有回调才调”的惯用法，卡片关闭后把控制权交回调用方 */
   function showChapterCard(def, cb) {
     const card = $('#chapter-card');
     $('#cc-date').textContent = def.date;
@@ -449,6 +579,8 @@ const Main = (() => {
     setTimeout(done, G.settings.motion === 'off' ? 1200 : 3000);
   }
 
+  /* 从标题页进入游戏：新档直接进序章指引；非新档（如刷新页面续玩）
+     先弹章节卡，再落回上次的场景与时段。 */
   function startChapter(isNew) {
     const def = CHAPTERS[G.ch] || CHAPTERS[0];
     $('#screen-title').classList.add('hidden');
@@ -468,6 +600,8 @@ const Main = (() => {
   }
 
   /* ---------- 序章 ---------- */
+  /* 新档开场引导：四条操作提示用 setTimeout 错峰弹出（第二个参数是
+     毫秒延迟），纯提示不拦操作，最后存一档。 */
   function prologue() {
     toast('点击地面移动 · 走近带「令」的标记，接主线', '引');
     setTimeout(() => toast('右侧任务卡写有当前主线与可接支线 · 点「前往」直达', '令'), 1600);
@@ -477,6 +611,8 @@ const Main = (() => {
   }
 
   /* ---------- 日子流转（自由世界：随时可歇，不再是「下一时段」） ---------- */
+  /* 进入/刷新时段：把 HUD、地点、传闻、任务、世界全部重画一遍，
+     并清空交互条（updateCtx(null)）。changed=true 时顺带报一声日期 */
   function enterPeriod(changed) {
     UI.updateHUD();
     UI.renderPlaces();
@@ -488,6 +624,7 @@ const Main = (() => {
   }
   /* 歇一日：写日记 / 夜谈 / 直接睡 —— 全都免费，行动点不再门控探索 */
   function rest() {
+    /* 对话/小游戏/战斗/面板任一开着都直接忽略，防状态错乱 */
     if (Dialog.active || MG.active || window.BATTLE_ACTIVE || UI.panelOpen) return;
     Dialog.play([
       { who: '旁白', text: `一日将尽（${Engine.dateLabel()}）。` },
@@ -518,6 +655,10 @@ const Main = (() => {
   }
 
   /* ---------- 交互条 ---------- */
+  /* 世界交互条（屏幕下缘按钮条）的唯一绘制者：世界层在“玩家眼前是什么”
+     变化时回调它，参数 near 描述眼前对象。按 near.type 分四种画法：
+     任务开战 / NPC（交谈·赠礼·采访·约战）/ 名场面 / 门；末尾再补上
+     场景专属动作。每次先 innerHTML 清空、从零重画。 */
   function updateCtx(near) {
     const bar = $('#ctxbar');
     bar.innerHTML = '';
@@ -547,12 +688,14 @@ const Main = (() => {
       chatBtn.onclick = () => chat(p);
       bar.appendChild(chatBtn);
       // 赠礼
+      /* 每人每天限赠一次：今天赠过就换成“已赠”文案并禁用按钮 */
       const giftBtn = el('button', 'ctx-btn', G.giftToday[p.id] ? '已赠' : '赠礼');
       if (G.giftToday[p.id]) giftBtn.disabled = true;
       giftBtn.onclick = () => giftPick(p);
       bar.appendChild(giftBtn);
       // 采访
       if (p.interview) {
+        /* 采访门槛：角色可自定义好感需求（ivNeed），没写默认 30 */
         const need = p.ivNeed != null ? p.ivNeed : 30;
         const ok = fav >= need && !Engine.hasShard(p.interview.give);
         const iv = el('button', 'ctx-btn' + (ok ? ' accent' : ''), ok ? '采访' : fav >= need ? '已采' : `采访 需好感${need}`);
@@ -598,6 +741,7 @@ const Main = (() => {
       b.onclick = () => UI.panelShop();
       bar.appendChild(b);
     }
+    /* 操场三件套（锦标赛/试炼/生存）：主线推到协会开张才点亮 */
     if (World.sceneId === 'playground' && G.ch >= 8) {
       const clubOn = !!G.flags.xiehui;
       const t = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '协会锦标赛' : '协会未立（推进主线至协会开张）');
@@ -616,6 +760,7 @@ const Main = (() => {
     if (World.sceneId === 'pingpong') {
       const b = el('button', 'ctx-btn', '打乒乓球');
       b.onclick = () => {
+        /* MG.launch(游戏名, 结束回调)：小游戏玩完把输赢经 ok 传回来 */
         MG.launch('pingpong', ok => {
           if (ok) {
             Engine.award('ach_pp'); Engine.addWen(2); Engine.addMoney(5);
@@ -629,6 +774,9 @@ const Main = (() => {
   }
 
   /* ---------- 马刀协会：锦标赛与生存（操场 · 协会立后开放） ---------- */
+  /* 协会锦标赛：waves 列出三波对手（鲁豪→小川→子琛），连赢三场才算
+     夺冠；restFull=true 波次间回满血，hpScale 压低敌方血量让连战不磨。
+     tournament 标志位专供结算钩子发三连赏。 */
   function startTournament() {
     if (!window.SJI_SCENES) return;
     const st = SJI_SCENES.stages.s8;
@@ -641,6 +789,7 @@ const Main = (() => {
       introScene: st.intro,
     });
   }
+  /* 生存模式：不给敌人名单（引擎自己按波刷怪），结算按撑过的波次给赏 */
   function startSurvival() {
     SJI_UI.startBattle({
       mode: 'survival', title: '破败城墙 · 生存', playerChar: 'yinkesi',
@@ -649,6 +798,10 @@ const Main = (() => {
   }
 
   /* ---------- 高难试炼：随剧情渐次解锁，各有特则，首通授稀有刀卡 ---------- */
+  /* 六场高难试炼的“菜单”（IIFE 内的私有数据，外界只能走 startTrial/
+     panelTrial/trialById 这几个出口访问）。每场带：解锁条件 ok()——
+     是函数不是布尔，每次开面板都现算；战斗配置 cfg（战场参数照例放
+     cfg.stage，rule 是本关特则）；首通奖励 reward（稀有刀卡 id）。 */
   const TRIALS = [
     { id: 't_yundonghui', name: '运动会 · 不怒自威', stars: 2,
       cond: '卷三后，且已胜绍铭', ok: () => G.ch >= 3 && Blades.hasCard('shaoming'),
@@ -690,11 +843,14 @@ const Main = (() => {
 
   function trialById(id) { return TRIALS.find(t => t.id === id); }
 
+  /* 开一场试炼：先核验解锁条件，再合成配置开战 */
   function startTrial(id) {
     const t = trialById(id);
     if (!t) return;
     if (!t.ok()) { toast('试炼未开：' + t.cond, '禁'); return; }
     Blades.registerChar();
+    /* 三层 Object.assign 合并：基础配置 ← 试炼 cfg ←（若试炼强制难度）
+       diff——越靠后的键越优先（后者覆盖前者） */
     SJI_UI.startBattle(Object.assign({
       mode: 'story', trialId: id,
       title: '高难试炼 · ' + t.name, playerChar: 'yinkesi',
@@ -702,6 +858,7 @@ const Main = (() => {
     }, t.cfg, t.cfg.diff ? { diff: t.cfg.diff } : {}));
   }
 
+  /* 试炼面板：逐场列出星级/特则/解锁条件/首通赏；已首通的可无限再战 */
   function panelTrial() {
     Blades.registerChar();
     UI.openPanel('协会试炼 · 高难关卡', body => {
@@ -730,11 +887,16 @@ const Main = (() => {
     });
   }
 
+  /* “做完一件事”的统一收尾：刷新 HUD/传闻/世界/任务并存档。
+     全文件十几处调用——一个集中收银台，免得每个动作重复这串 */
   function afterAction() {
     UI.updateHUD(); UI.renderHearsay(); World.refresh(); Quests.render(); Save.write();
   }
 
   /* ---------- 行为 ---------- */
+  /* 交谈：每天头两句免费，之后要花 1 行动点；首次聊天记入“已结识”。
+     加完好感还有 riskCheck——上课时间闲聊可能被巡查逮住
+     （Engine.caughtPlay 播被抓剧情并接管后续） */
   function chat(p) {
     if (G.chatCount >= 2 && !Engine.spendAP(1)) return;
     G.chatCount++;
@@ -746,6 +908,7 @@ const Main = (() => {
     if (Engine.riskCheck()) { Engine.caughtPlay(() => afterAction()); return; }
     Dialog.play([{ who: p.hao || p.name, text: line }], afterAction);
   }
+  /* 赠礼选物面板：列出行囊物品并标注对方喜好；行囊空则直接带去商店 */
   function giftPick(p) {
     const ids = Object.keys(G.bag).filter(k => G.bag[k] > 0);
     if (!ids.length) { toast('行囊空空——去小卖部买点礼物', '囊'); UI.panelShop(); return; }
@@ -765,6 +928,7 @@ const Main = (() => {
       });
     });
   }
+  /* 真正送礼：扣库存、记“今日已赠”，按心头好 12 / 喜欢 6 / 普通 2 加好感 */
   function doGift(p, id) {
     G.bag[id]--;
     G.giftToday[p.id] = 1;
@@ -773,17 +937,22 @@ const Main = (() => {
     const n = love ? 12 : like ? 6 : 2;
     Engine.addFavor(p.id, n);
     if (love) Sfx.unlock(); else Sfx.good();
+    /* 顺手查两个条件型成就：特定人物好感满 100、零花钱达标 */
     if (p.id === 'keyi' && Engine.favorOf(p.id) >= 100) Engine.award('ach_sugar');
     if (G.money >= 40) Engine.award('ach_rich');
     UI.closePanel();
     Dialog.play([{ who: p.hao || p.name, text: love ? `（眼睛一亮）此物……汝如何知吾所好？善！大善！` : like ? '（收下，端详片刻）有心了。' : '（收下）……多谢。' }], afterAction);
   }
+  /* 采访：花 1 行动点，白得一份史料碎片外加 5 好感，再播采访剧本 */
   function interview(p) {
     if (!Engine.spendAP(1)) return;
     Engine.grantShard(p.interview.give, 'interview');
     Engine.addFavor(p.id, 5);
     Dialog.play(p.interview.script, afterAction);
   }
+  /* 旁观名场面：播完剧本记入 doneEvents（防重复），按剧本配置开新地点/
+     发史料/给当事人加好感/发成就。mgStep 是剧本里夹的小游戏步骤，
+     _mgResult 是 dialog.js 玩完后写回该步骤对象的输赢记录。 */
   function playEvent(ev) {
     Dialog.play(ev.script, () => {
       G.doneEvents.push(ev.id);
@@ -809,6 +978,8 @@ const Main = (() => {
       afterAction();
     });
   }
+  /* 听课：花 1 行动点换 2 文笔；22% 概率触发课堂插曲——被老师点名，
+     举手答对加声望、答错掉声望、低头装笔记稳过（一道选择题） */
   function listenClass() {
     if (!Engine.spendAP(1)) return;
     Engine.addWen(2); G.stats.listened++;
@@ -832,7 +1003,10 @@ const Main = (() => {
     toast('听课认真，文笔 +2', '文');
     afterAction();
   }
+  /* 世界层每当“玩家眼前是什么”变化就回调 onCtxChange，转手交给
+     updateCtx 重画交互条 */
   /* ---------- 世界回调 ---------- */  function onCtxChange(near) { updateCtx(near); }
+  /* 点击 NPC：太远就先走过去（onQuest 同款套路），走近了才弹交互条 */
   function onNPC(p) {
     if (Dialog.active || MG.active) return;
     const pos = World.npcPos(p.id);
@@ -842,15 +1016,20 @@ const Main = (() => {
     }
     updateCtx({ type:'npc', p });
   }
+  /* 点击名场面标记：同样“先走近再触发” */
   function onEvent(ev) {
     if (Dialog.active || MG.active) return;
     const [px, py] = World.playerPos;
     if (Math.hypot(ev.pos[0] - px, ev.pos[1] - py) > 80) { World.walkTo(ev.pos[0], ev.pos[1] + 30); return; }
     playEvent(ev);
   }
+  /* 对话播完的收尾（清单与 afterAction 相同），单列一份作为对外出口 */
   function afterDialog() { UI.updateHUD(); UI.renderHearsay(); World.refresh(); Quests.render(); Save.write(); }
 
   /* ---------- 终章：高考 · 毕业 · AI ---------- */
+  /* 终章入口（主线推到顶时由任务层调用）：先弹“高考”章节卡，再进校门
+     场景播最后一幕；中间给玩家一道选择（记心里+声望 / 做卷子+文笔），
+     播完接 graduation() */
   function finale() {
     showChapterCard(CHAPTERS[16], () => {
       World.enter('gate');
@@ -869,6 +1048,8 @@ const Main = (() => {
       ], () => graduation());
     });
   }
+  /* 毕业去向：本传+外传人物全列一遍——写过的给结局文案，没写过的
+     只有一行遗憾。concat 把两个数组拼成一个新数组 */
   function graduation() {
     const all = PEOPLE.concat(PEOPLE_WAI);
     UI.openPanel('毕业 · 诸君去向', body => {
@@ -888,21 +1069,29 @@ const Main = (() => {
       body.appendChild(b);
     });
   }
+  /* 真结局“一年后 · AI 读史”：统计立传卷数、笔风直曲、平均好感、马刀
+     战绩，拼成一篇 AI 读后感，并按立传数与声望授予最终称号 */
   function aiEpilogue() {
     Engine.award('ach_ai');
     const pub = Object.keys(G.vols).length;
+    /* reduce 是数组的“滚雪球”汇总（近似 Python 的 sum）：把各卷评分
+       累加起来再除以卷数，得平均分 */
     const avg = pub ? Object.values(G.vols).reduce((a, b) => a + b.grade, 0) / pub : 0;
     let title = '残卷 · 史未成而人已散';
     if (pub >= 6) title = '史官 · 有所记，有所失';
     if (pub >= 10) title = '良史 · 秉笔直书，温润如玉';
     if (pub >= 15) title = G.rep >= 60 ? '太史公 · 究天人之际，通古今之变' : '太史公（孤本）· 书成而友尽？';
+    /* 笔风判定：直笔远多于曲笔是“峻直”，反之“敦厚”，势均力敌则“直曲相济” */
     const styleLine = G.stats.direct > G.stats.curve * 2 ? '峻直' : G.stats.curve > G.stats.direct * 2 ? '敦厚' : '直曲相济';
     // 已立传诸人的平均好感
     const castIds = new Set();
     Object.keys(G.vols).forEach(no => VOL_BY_NO[no].cast.forEach(id => castIds.add(id)));
     const favAvg = castIds.size ? Math.round([...castIds].reduce((a, id) => a + Engine.favorOf(id), 0) / castIds.size) : 0;
     // 马刀行结局变体
+    /* 马刀行结局素材：零胜是“全书不提马刀”的文人局，30+ 胜则逼近“马刀之神” */
     const wins = G.wins || 0, cards = (G.blades && G.blades.cards || []).length;
+    /* typeof Blades !== 'undefined'：跨文件判活惯用法——顶层 const 不挂
+       window，裸名跨文件可用，但用前先探一探它是否存在 */
     const rank = (typeof Blades !== 'undefined' && Blades.rankName()) || '未入册';
     let bladePara;
     if (wins === 0) bladePara = '「全书几乎不提马刀。你站在刀场边上，把笔墨都留给了人。」';
@@ -934,6 +1123,7 @@ const Main = (() => {
   }
 
   /* ---------- 菜单面板 ---------- */
+  /* 系统面板：六个子面板入口排成两列网格（cssText 直接写行内样式） */
   function menuPanel() {
     UI.openPanel('系统', body => {
       const row = el('div', '');
@@ -950,6 +1140,7 @@ const Main = (() => {
   }
 
   /* ---------- 全局按钮 ---------- */
+  /* 给 HUD 上四个常驻按钮（史书/刀谱/行囊/系统）绑回调 */
   function bindHUD() {
     $('#btn-hud-book').onclick = () => UI.panelBook();
     $('#btn-hud-blade').onclick = () => panelBlades();
@@ -957,11 +1148,16 @@ const Main = (() => {
     $('#btn-menu').onclick = () => menuPanel();
   }
 
+  /* 开机：绑好标题页与 HUD 按钮、把“玩家靠近了什么”的回调登记给
+     世界层，然后启动世界主循环——整个游戏由此点亮 */
   function boot() {
     bindTitle();
     bindHUD();
     World.setOnCtx(onCtxChange);
     // 底部导航末位追加「歇一日」（自由世界：随时可推进日子，无时段门禁）
+    /* 偷梁换柱（函数包装，俗称猴子补丁）：把原函数存进 orig，再用
+       同名新函数先干原来的活、再往地点栏末尾追加「歇一日」按钮——
+       不改别人文件的源码也能给别人的模块加功能 */
     const orig = UI.renderPlaces;
     UI.renderPlaces = function () {
       orig();
@@ -973,10 +1169,15 @@ const Main = (() => {
     World.start();
   }
 
+  /* IIFE 的出口：只有列在这里的名字外界才摸得到（相当于模块的公开接口，
+     其余函数全是闭包里的私有品）。`boot,` 是 ES6 简写，即 boot: boot */
   return { boot, onNPC, onEvent, afterDialog, updateCtx, onCtxChange,
            challenge, startDuel: p => SJI_UI.startBattle(duelCfg(p)), panelBlades, normalizeG,
            startTournament, startSurvival, startTrial, panelTrial, trialById,
            onQuest, panelQuests, finale, rest, pickDifficulty };
 })();
 
+/* HTML 解析完、DOM 树就绪后再开机（免得摸到还没生成的页面元素）。
+   Main 是顶层 const、不挂 window，但这个回调与它同在本文件作用域里，
+   闭包会记住它——所以这里能安全喊到 Main.boot() */
 window.addEventListener('DOMContentLoaded', () => Main.boot());

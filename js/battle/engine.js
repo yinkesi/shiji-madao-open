@@ -4,64 +4,148 @@
  * 行动：买刀、买马、用技、行动、血祭。猜拳胜四动、和三动、负二动。同城（城墙）以马踢之，扣三血并踢下城；
  * 同区以刀击之，扣一血。血祭者，扣当前之半血而令下次伤害翻倍。活者为王。
  * ============================================================ */
+/* ============================================================
+ * 【新手导读】SJI_ENGINE —— 马刀战棋的「规则大脑」（DOM 无关）
+ *
+ * 【这个文件是干嘛的】
+ * 7×7 棋盘上的回合制战棋引擎：开局众人立于己方城墙，猜拳定行动点
+ * （胜多、和次、负少），随后买刀买马、走位、刀击/马踢/血祭/放技能，
+ * 放倒所有敌人即胜。它只「算规则」，不画一像素：所有演出（飘字、音效、
+ * 弹窗、动画）都通过 window.SJI_UI 钩子请 js/battle-ui.js 代劳。
+ * 正因为不碰页面元素，它能在 Node 里裸跑——tests/battle/engine/ 下的
+ * test_*.mjs 测试就是把它和假 UI 拼在一起跑的。
+ *
+ * 【架构位置】
+ * battle 层（window.SJI_* 命名空间）三件套：js/battle/config.js 出平衡
+ * 参数（本文件里的 CFG），js/battle/data.js 出角色与技能数据（D），本文件
+ * 把两者搅在一起模拟整场战斗；js/battle-ui.js 是它的「显示器 + 手柄」。
+ * 这套「引擎/UI 分离」是全项目最值得学的设计：规则不依赖浏览器，才能被
+ * 自动化测试反复锤打。本项目没有 import/export，index.html 按固定顺序
+ * 加载 22 个 <script>；顶层 const 不挂 window，跨文件一律走 window.SJI_*。
+ *
+ * 【暴露的全局名】
+ * window.SJI_ENGINE —— 即文件末尾 IIFE return 出来的
+ * { Battle, isWall, inB, cheb, manh, adj, SIZE, makeUnit }。
+ * 外界主要用 new SJI_ENGINE.Battle(cfg) 开一场战斗，await battle.run()
+ * 跑到分出胜负，再查 battle.result。
+ *
+ * 【新手阅读提示】推荐顺序：
+ *   1) 配置：js/battle/config.js 的 RULES / DIFFICULTY / AI_AGGR 等常量表；
+ *   2) 状态初始化：makeUnit（一枚棋子的全部字段）→ 构造器 → _build（摆子、调血量）；
+ *   3) 主回合循环：run()（一回合的完整时序，引擎的心跳）→ aiAct（AI 怎么过回合）；
+ *   4) 技能/特则分派：doSkill 的 switch，以及散落各处的 this.rule.id（9 种剧情特则）；
+ *   5) 收尾：伤害管线 calcDamage → dealDamage，回合末结算 _endRound。
+ * 两个高频 JS 惯用法：await（在此暂停，等界面演完/玩家点完再继续）；
+ * x || 默认值（取不到就兜底）。战场参数 hpScale/restFull/blocked 只从
+ * cfg.stage 读取；terrain（障碍物画法）也在 stage，但由 UI 侧消费。
+ * ============================================================ */
 window.SJI_ENGINE = (function () {
   "use strict";
+  // 依赖的全局配置中心与角色数据表（index.html 保证它们先于本文件加载）。
   const CFG = window.SJI_CONFIG;
   const D = window.SJI_DATA;
+  // 棋盘边长（7×7）与单场回合上限（超时判负，见 run() 里的对应分支）。
   const SIZE = 7;
   const MAX_ROUND = 30;
 
+  /* ---------- 几何小工具：引擎所有「距离/方位」讨论的语汇 ---------- */
+  // isWall(r,c)：是否站在四周一圈「城墙」上（马踢只在墙上可用，站墙另有加成）。
+  // inB(r,c)：坐标是否在棋盘内（r=行、c=列，都从 0 数起）。
+  // cheb：切比雪夫距离（像国际象棋的王，斜走也算 1 格），判定「相邻」用它；
+  // manh：曼哈顿距离（只横竖走），马踢射程用它量；adj：两者相邻（贴脸）。
   const isWall = (r, c) => r === 0 || r === SIZE - 1 || c === 0 || c === SIZE - 1;
   const inB = (r, c) => r >= 0 && r < SIZE && c >= 0 && c < SIZE;
   const cheb = (a, b) => Math.max(Math.abs(a.r - b.r), Math.abs(a.c - b.c));
   const manh = (a, b) => Math.abs(a.r - b.r) + Math.abs(a.c - b.c);
   const adj = (a, b) => cheb(a, b) === 1;
+  // DIRS：八个方向的 [行增量, 列增量]，找邻格时挨个试。
   const DIRS = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+  // SPAWNS：8 个标准出生点（四角 + 四边中点），玩家固定占其中的 [6,3]。
   const SPAWNS = [[0,0],[0,6],[6,0],[6,6],[0,3],[6,3],[3,0],[3,6]];
 
+  /* sleep：停 ms 毫秒再往下走（返回 Promise，配 await 用）。
+     战斗里到处 await sleep(...)，是给界面动画留播放时间——引擎的节奏感全靠它；
+     播放速度设置会把等待打 1 / 0.6 / 0.3 折（测试里拨到最快档，几乎不等）。 */
   function sleep(ms) {
     const mult = [1, 0.6, 0.3][(window.SJI.settings && window.SJI.settings.speed) ? window.SJI.settings.speed - 1 : 0];
     return new Promise(res => setTimeout(res, Math.max(16, ms * mult)));
   }
 
+  /* ---------- 造棋子：一枚棋子 = 角色在本场的全部状态 ---------- */
+  /* makeUnit：按角色 id 造一枚棋子。字段按组记——
+     身份：uid（"阵营_序号"，存档对齐用）、ch（指向 data.js 的角色数据）、charId、side；
+     血量：hp/maxhp；位置：r/c 逻辑格（rx/ry 渲染坐标，见 _place）；
+     装备：hasKnife/hasHorse；状态：st 异常表、cds 冷却表、boons 增益表。
+     之后所有战斗逻辑都在读写这些字段，看懂这里等于看懂半个引擎。 */
   function makeUnit(charId, side, idx) {
     const ch = D.CHARACTERS[charId];
     if (!ch) throw new Error("未知角色: " + charId);
     return {
       uid: side + "_" + idx, ch, charId, side,
       hp: ch.hp, maxhp: ch.hp,
+      // r/c 是逻辑坐标；rx/ry 是给 UI 的渲染坐标（注意 rx 对应列、ry 对应行）。
       r: 0, c: 0, rx: 0, ry: 0,
+      // offField > 0 表示「被遣返回家」，数值是倒数中的回家回合数。
       alive: true, offField: 0,
       hasKnife: false, hasHorse: false,
+      // 异常状态表：skip=跳过回合数、poison=中毒回合数、apMod=行动点增减（多为负）、
+      // disarm/seal=缴械（不能刀击）、silence=沉默（不能施技）、shield=护盾值、
+      // bloodlust=血祭层数（下次伤害翻倍）、grudge/empower=一次性加伤值（用掉即清零）。
       st: { skip: 0, poison: 0, apMod: 0, disarm: 0, silence: 0, seal: 0, shield: 0, bloodlust: 0, grudge: 0, empower: 0 },
+      // cds：各技能的剩余冷却（键=技能序号）；usedSave：免死被动「每场限一次」的记号。
       cds: {}, usedSave: false,
+      // apNow：本回合剩余行动点（引擎里的「货币」）；roundDealt：本回合个人输出；
+      // dampUsed：「依然」被动每回合一次减伤的记号。
       apNow: 0, roundDealt: 0, dampUsed: false,
+      // boons：增益表（出身/生存三选一所得），多为永久加值，各结算处按需读取。
       boons: { knife: 0, horse: 0, move: 0, dodge: 0, regen: 0, apBonus: 0, cdReduce: 0, blood2: false,
                bloodFree: false, cleave: 0, horseRange: 0, killHeal: 0, shield: 0, firstStrike: 0 },
+      // AI 个人进攻性（0~1，默认 0.6）。注意 || 兜底的副作用：aggr 为 0 也会被换成 0.6。
       aggr: ch.aggr || 0.6
     };
   }
 
+/* ============================================================
+ * Battle 类：一场战斗从摆子到分胜负的全部状态与逻辑。
+ * 用法：const b = new Battle(cfg) 开局 → await b.run() 跑完 → 查 b.result。
+ * ============================================================ */
   class Battle {
     /* cfg: {mode:'story'|'free'|'survival', stage, playerChar, enemies[], allies[], diff, survivalWave} */
+    /* cfg 除注释所列还可带：rule（特则）、triggers（剧情台词）、aiAggr（AI 档位）、
+       waves（多波敌人）。stage 是关卡参数包：hpScale=敌方血量倍率、
+       restFull=波次间回满血、blocked=障碍格——引擎只从 cfg.stage 读取。 */
     constructor(cfg) {
       this.cfg = cfg;
       this.mode = cfg.mode;
       this.diff = cfg.diff || "normal";
+      // 剧情特则 {id, desc}，共 9 种：dyad 同门 / uprising 起义 / chaos 党争（原版），
+      // cans 看台飞瓶 / stench 鲍鱼之肆 / yansuan 验算 / suomen 锁门 /
+      // zhengshi 争食 / zhongshu 种树不绝（本作新增）。引擎没有集中的特则区，
+      // 各特则按触发时机散在 doKnife/doHorse/calcDamage/run/_endRound/aiAct 等处，
+      // 全局搜 this.rule 可一网打尽。
       this.rule = cfg.rule || null;
+      // 剧情台词触发器：[{when, round/wave/char, lines}]；这里给每条补 fired 标记，
+      // 保证一段对话只播一次。
       this.triggers = (cfg.triggers || []).map(t => Object.assign({}, t, { fired: false }));
+      // 敌方 AI 进攻性档位（passive 消极 / measured 守成 / active 主动 / frenzy 狂攻），
+      // 具体数值查 config.js 的 AI_AGGR 表。
       this.aiAggr = cfg.aiAggr || "active";
       this.boonsTaken = [];
       // 地形：关卡可用 blocked 指定障碍格（桌子/讲台等），不可通行、不可站立
       const blk = (cfg.stage && cfg.stage.blocked) ? cfg.stage.blocked : [];
       this.blocked = new Set(blk.map(rc => rc[0] + "," + rc[1]));
+      // round=回合数；over=终局旗（各处一见 over 便收手）；result 为 'win'/'lose'/'timeout'。
       this.round = 0;
       this.over = false;
       this.result = null; // 'win'|'lose'|'timeout'
       this.log = [];
+      // units：全场所有棋子（含后来入场的树/援军）；player 是玩家棋子的快捷引用。
       this.units = [];
+      // 多波次关卡：waves=[第 1 波敌人 id 表, 第 2 波, ...]；waveIndex=打到第几波。
       this.waveIndex = 0;
       this.waves = cfg.waves || [cfg.enemies];
+      // stats：整场统计（结算与成就判定用）：是否用过技/买马/血祭、玩家全程最低血、
+      // 是否离开过城墙、步数、治疗量、击杀数等。
       this.stats = {
         usedSkill: false, boughtHorse: false, usedBlood: false, minHp: undefined,
         everLeftWall: false, moves: 0, heals: 0, kills: 0, rushHit: false,
@@ -84,6 +168,8 @@ window.SJI_ENGINE = (function () {
       const enemies = enemyIds.map((id, i) => makeUnit(id, "enemy", i));
       this.stats.startEnemies = enemies.length;
 
+      // 摆子：玩家钉在下方 [6,3]；其余出生点按行分成 far（上半场，留给敌人）与
+      // near（下半场，留给友军），各自洗牌后挨个领取，不够就随机找空格。
       const spots = SPAWNS.slice();
       // 玩家固定下方，友军其侧，敌人远端
       const playerSpot = [6, 3];
@@ -117,15 +203,19 @@ window.SJI_ENGINE = (function () {
       this.units = [p, ...allies, ...enemies];
 
       this.player = p;
+      // 开局护盾类出身：把 boons 里预存的护盾折算成本场实际生效的 st.shield。
       if (p.boons.shield > 0) p.st.shield += p.boons.shield;
       this._trackMinHp(p);
+      // battle 级 roundDealt：玩家阵营本回合总输出（攒满 5 点亮「连环快攻」成就标记）。
       this.roundDealt = 0;
       this.pushLog("—— 马刀场开。规则至简，而引人入胜。——");
       if (this.rule) this.pushLog("【特则】" + this.rule.desc);
     }
 
+    // 落子：写逻辑坐标，同时对齐渲染坐标（rx 跟列 c、ry 跟行 r）。
     _place(u, rc) { u.r = rc[0]; u.c = rc[1]; u.rx = u.c; u.ry = u.r; }
 
+    // 随机找个能站的格子：先碰运气 120 次，不行就全图扫一遍，最坏回中心 [3,3]。
     _randomFree() {
       for (let t = 0; t < 120; t++) {
         const r = Math.floor(Math.random() * SIZE), c = Math.floor(Math.random() * SIZE);
@@ -135,6 +225,7 @@ window.SJI_ENGINE = (function () {
       return [3, 3];
     }
 
+    // 生存模式第 n 波的敌人名单：小怪 1~4 只随波数增长，逢 5 波添一名精英压阵。
     _survivalWave(n) {
       const list = [];
       const count = Math.min(1 + Math.ceil(n / 2), 4);
@@ -143,6 +234,7 @@ window.SJI_ENGINE = (function () {
       if (n === 10) list.push("wonder");
       if (n === 15) list.push("chongguo");
       if (n === 20) list.push("weibing");
+      // 「| 0」是按位或 0，效果等于砍掉小数取整；这句让 20 波后每 5 波从精英池轮换一个。
       if (n > 20 && n % 5 === 0) list.push(["hanxiao", "wonder", "chongguo", "weibing", "touge"][n / 5 % 5 | 0]);
       return list;
     }
@@ -156,12 +248,15 @@ window.SJI_ENGINE = (function () {
       if (!this.units) return null;   // 布阵阶段 units 尚未装配
       return this.units.find(u => u.alive && u.offField <= 0 && u.r === r && u.c === c) || null;
     }
+    // living：还活着且在场的某方单位列表；不传 side 就是全场（_endRound 遍历用）。
     living(side) { return this.units.filter(u => u.alive && u.offField <= 0 && (!side || u.side === side)); }
+    // opponentsOf：u 的所有存活敌人——玩家与友军互为同阵营。
     opponentsOf(u) {
       const hostile = u.side === "enemy" ? ["player", "ally"] : ["enemy"];
       return this.units.filter(x => x.alive && x.offField <= 0 && hostile.includes(x.side));
     }
 
+    // 战报：记入 log（只留最近 120 条），并实时推给 UI 显示。
     pushLog(s) { this.log.push(s); if (this.log.length > 120) this.log.shift(); if (window.SJI_UI) window.SJI_UI.onLog(s); }
 
     /* ---------- 伤害核心 ---------- */
@@ -169,6 +264,8 @@ window.SJI_ENGINE = (function () {
        全部被动判定一律走 hasPassive(u, charId)，不得直接比较 charId。 */
     hasPassive(u, id) {
       if (u.charId === id) return true;
+      // 音克思（开放世界主角）没有天生被动，靠两处「学来的」补足：装备卡的来源
+      // _learnedFrom、身怀之技数组 _innates——这就是「多来源判定」的另外两源。
       if (u.charId === "yinkesi") {
         if (u._learnedFrom === id) return true;
         if (u._innates && u._innates.includes(id)) return true;
@@ -178,10 +275,15 @@ window.SJI_ENGINE = (function () {
 
     _passiveImmuneStun(u) { return this.hasPassive(u, "xiannv") || this.hasPassive(u, "wanzhen"); }
 
+    /* 伤害计算第一段：只「算数」，不扣血不演出（那是 dealDamage 的事）。
+       流程分四段：攻方加成 → 倍率翻倍 → 守方减伤 → 至少 1 点封底。
+       opts 开关：type=伤害类型、pierce=穿透、noBlood=不吃血祭、
+       dyad=套用「同门」特则、noScale=不吃敌方人数缩放、min0=允许 0 伤。 */
     calcDamage(att, def, base, opts = {}) {
       let dmg = base;
       const t = opts.type || "knife";
       if (t === "knife") {
+      // —— 攻方加成段：大哥站墙 +1、微荣 +1，再叠装备/增益的刀伤加成 ——
         if (this.hasPassive(att, "dage") && isWall(att.r, att.c)) dmg += 1;
         if (this.hasPassive(att, "weirong")) dmg += 1;
         dmg += att.boons.knife || 0;
@@ -196,15 +298,18 @@ window.SJI_ENGINE = (function () {
         this.pushLog("「斌」秒之！一笔算出，伤害翻倍。");
         window.SJI_UI.fxFloat(def, "秒之！", "#ffd98a");
       }
+      // 一次性资源兑现：血祭层数让伤害翻倍并消耗一层；empower/grudge 是加一次就清零的加值。
       if (att.st.bloodlust > 0 && !opts.noBlood) { dmg *= 2; att.st.bloodlust--; }
       if (att.st.empower > 0) { dmg += att.st.empower; att.st.empower = 0; }
       if (att.st.grudge > 0) { dmg += att.st.grudge; att.st.grudge = 0; }
+      // 条件加成：玉润残血 +1；邵明/勤发打半血目标 +1；大展与可靠贴身 +1。
       if (this.hasPassive(att, "yurun") && att.hp < 5) dmg += 1;
       if (this.hasPassive(att, "shaoming") && def.hp <= def.maxhp / 2) dmg += 1;
       if (this.hasPassive(att, "qinfa") && def.hp <= def.maxhp / 2) dmg += 1;
       if (this.hasPassive(att, "dazhan") && this._keaiAdjacent(att)) dmg += 1;
       // 剧情规则：敌人相邻同门
       if (opts.dyad && (opts.type === "knife" || opts.type === "horse") && att.side === "enemy" && this.living("enemy").length === 2 && this._friendlyAdjacent(att)) dmg += 1;
+      // 敌方伤害按人数缩放（围殴时单体递减，详见 enemyDmgScale）。
       if (att.side === "enemy" && !opts.noScale) {
         const sc = this.enemyDmgScale();
         if (sc !== 1) dmg = Math.max(1, Math.round(dmg * sc));
@@ -216,20 +321,27 @@ window.SJI_ENGINE = (function () {
         if (this.hasPassive(def, "yiran") && !def.dampUsed) { dmg -= 1; def.dampUsed = true; }
         // 护盾吸收已移至 dealDamage（在最小伤害钳制之后）
       }
+      // 封底：伤害至少 1 点（min0 场景除外）——「绝对打不动」在马刀世界不存在。
       return Math.max(opts.min0 ? 0 : 1, dmg);
     }
 
+    // 「同门」特则的判定：敌方恰好两名、且这人身边站着同伴（同伴压阵，刀马伤害 +1）。
     _friendlyAdjacent(u) {
       const same = u.side === "enemy" ? "enemy" : u.side;
       return this.living(same).some(x => x !== u && adj(x, u));
     }
+    // 大展被动的触发条件：同阵营有个「可靠」贴身。
     _keaiAdjacent(dazhan) {
       return this.units.some(x => x.alive && x.offField <= 0 && x.charId === "keai" && x.side === dazhan.side && adj(x, dazhan));
     }
 
+    /* 伤害计算第二段：真正「扣血 + 演出 + 死亡结算」。
+       顺序：攻击动画 → 闪避判定 → 算伤 → 护盾吸收 → 扣血 → 死亡/击破回血。
+       本身没有 await，标 async 只为与其它行动原语统一地 await 调用。 */
     async dealDamage(att, def, base, opts = {}) {
       if (!def.alive || def.offField > 0 || this.over) return 0;
       if (window.SJI_UI && window.SJI_UI.fxAttack) window.SJI_UI.fxAttack(att, def, { type: opts.type || "knife" });
+      // pierce=穿透：无视闪避与减伤（卫兵的破门技自带，也可由 opts 传入）。
       const pierce = opts.pierce || (att && this.hasPassive(att, "weibing"));
       // 闪避
       if (!pierce && !opts.noDodge) {
@@ -253,19 +365,25 @@ window.SJI_ENGINE = (function () {
       }
       def.hp -= dmg;
       this._trackMinHp(def);
+      // 记输出：battle 级（本回合全队）与 unit 级（个人）两本账。
       if (att.side === "player") { this.roundDealt += dmg; att.roundDealt = (att.roundDealt || 0) + dmg; }
       // 小川被动
       if (this.hasPassive(def, "xiaochuan") && dmg > 0) def.st.grudge = Math.min(2, def.st.grudge + 1);
+      // 首次跌到半血：触发剧情对话（playerLow / enemyLow）。
       if (def.alive && def.hp > 0 && def.hp <= def.maxhp / 2) {
         if (def.side === "player") this._checkTriggers("playerLow");
         else if (def.side === "enemy") this._checkTriggers("enemyLow", def.charId);
       }
+      // 表现层三连：受击飘字、音效、战报——引擎只发通知，怎么画是 UI 的事。
       window.SJI_UI.fxHit(def, dmg, opts);
       window.SJI_AUDIO[(opts.type === "horse") ? "kick" : (dmg >= 3 ? "crit" : "hit")]();
       const verb = opts.type === "horse" ? "以马踢之" : (opts.type === "skill" ? "以技击之" : (opts.type === "poison" ? "受毒" : "以刀击之"));
       const src = att ? "「" + att.ch.hao + "」" + verb + "「" + def.ch.hao + "」，损" + dmg + "血。" : "「" + def.ch.hao + "」损" + dmg + "血。";
       this.pushLog(src);
+      // 个人单回合输出满 5：点亮「连环快攻」成就标记（置 -999 防重复点亮）。
       if (att && att.side === "player" && att.roundDealt >= 5) { att.roundDealt = -999; this.stats.rushHit = true; }
+      // 死亡结算：先让「免死」被动抢救，救不回才正式倒下；玩家击杀敌人则按难度
+      // 回血（击破回血），并触发 enemyDown 剧情对话。
       if (def.hp <= 0) {
         if (!opts.pierce && this._tryLethalSave(def)) return dmg;
         def.hp = 0; def.alive = false;
@@ -292,6 +410,7 @@ window.SJI_ENGINE = (function () {
       this.stats.minHp = (this.stats.minHp === undefined) ? cur : Math.min(this.stats.minHp, cur);
     }
 
+    // 免死判定：孤因/向东留 1 血、崇国回 3 血；每人每场限一次（usedSave 记号）。
     _tryLethalSave(def) {
       if (this.hasPassive(def, "guyin") && !def.usedSave) { def.usedSave = true; def.hp = 1; this.pushLog("皇太子庇佑！「因」保留一血。"); window.SJI_UI.fxFloat(def, "皇太子！", "#ffd700"); return true; }
       if (this.hasPassive(def, "xiangdong") && !def.usedSave) { def.usedSave = true; def.hp = 1; this.pushLog("「东」乘乱潜逃，保留一血！"); window.SJI_UI.fxFloat(def, "潜逃！", "#9db8ff"); return true; }
@@ -299,6 +418,8 @@ window.SJI_ENGINE = (function () {
       return false;
     }
 
+    /* 绕开一切加减成的「真实伤害」：毒发、撞墙、看台飞瓶等都走这里。
+       与 dealDamage 的区别：不判闪避/护盾/攻方被动，但免死与死亡结算照走。 */
     rawHurt(def, n, why) {
       if (!def.alive) return;
       def.hp -= n;
@@ -315,6 +436,7 @@ window.SJI_ENGINE = (function () {
       }
     }
 
+    // 回血：溢出自动截断（real=实际回复量）；玩家的治疗还累计进存档统计。
     heal(u, n, why) {
       if (!u.alive) return;
       const real = Math.min(n, u.maxhp - u.hp);
@@ -329,12 +451,14 @@ window.SJI_ENGINE = (function () {
       this.pushLog("「" + u.ch.hao + "」" + (why || "回复") + real + "血。");
     }
 
+    // 晕眩：往 st.skip 叠回合数（取最大、不叠层）；有「定力」类被动的角色免疫。
     stun(u, rounds, why) {
       if (this._passiveImmuneStun(u)) { this.pushLog("「" + u.ch.hao + "」朗声诵书，不为所动！"); return; }
       u.st.skip = Math.max(u.st.skip, rounds);
       this.pushLog("「" + u.ch.hao + "」" + (why || "被惑") + "，下回合跳过。");
     }
 
+    // 击退：沿「施力点→受力点」方向一格一格推，落点不合法就停；头哥岿然不动。
     async pushUnit(u, fromR, fromC, steps) {
       if (this.hasPassive(u, "touge")) { this.pushLog("「头」与球棍意念合一，岿然不动。"); return; }
       const dr = Math.sign(u.r - fromR), dc = Math.sign(u.c - fromC);
@@ -352,11 +476,13 @@ window.SJI_ENGINE = (function () {
     /* ---------- 行动原语 ---------- */
     /* 记录可撤销的移动快照（仅玩家、仅本回合、且此后未造成伤害） */
     _pushUndo(u) {
+      // _undo：悔棋快照栈，每步存 {行, 列, 剩余行动点}。
       if (!u._undo) u._undo = [];
       if (u._undo.length > 12) u._undo.shift();
       u._undo.push({ r: u.r, c: u.c, apNow: u.apNow });
     }
 
+    // 悔棋：弹出最近一条快照，位置与行动点一并还原（玩家专属福利）。
     undoMove() {
       const p = this.player;
       if (!p._undo || !p._undo.length) return false;
@@ -374,6 +500,7 @@ window.SJI_ENGINE = (function () {
       for (const u of this.units) if (u._undo) u._undo.length = 0;
     }
 
+    // 走一格花 1 行动点；玩家走前先存快照（可悔棋），并统计步数、是否离开过城墙。
     async doMove(u, r, c) {
       if (u.apNow <= 0) return false;
       if (!this.passable(r, c)) return false;
@@ -389,6 +516,7 @@ window.SJI_ENGINE = (function () {
       return true;
     }
 
+    // 买刀：花 1 行动点；课代表（离樊）的被动「夺权」可免费白拿。
     async doBuyKnife(u) {
       const free = this.hasPassive(u, "lifan");
       if (u.hasKnife || (!free && u.apNow <= 0)) return false;
@@ -399,6 +527,7 @@ window.SJI_ENGINE = (function () {
       return true;
     }
 
+    // 买马：花 1 行动点；买到即 lockUndo——有影响的行动之后不许悔棋。
     async doBuyHorse(u) {
       if (u.hasHorse || u.apNow <= 0) return false;
       u.apNow--;
@@ -410,6 +539,8 @@ window.SJI_ENGINE = (function () {
       return true;
     }
 
+    /* 刀击：基础 1 点、须相邻、花 1 行动点；被缴械（seal/disarm）时封印。
+       cleave（刀势）可让余波再扫中主目标旁至多 extra 名敌人。 */
     async doKnife(u, t) {
       if (!u.hasKnife || u.apNow <= 0 || !t || !t.alive) return false;
       if (u.st.seal > 0 || u.st.disarm > 0) {
@@ -432,6 +563,8 @@ window.SJI_ENGINE = (function () {
       return true;
     }
 
+    /* 马踢：城墙专属重击——基础 3 点、双方都得在墙上、曼哈顿距离 ≤3。
+       踢完若目标没死，就近找空地把人踢下城；四周无处落脚就退而求其次撞 1 点。 */
     async doHorse(u, t) {
       if (this.rule && this.rule.id === "suomen") { this.pushLog("禁闭室无墙可踢——马踢不可用。"); return false; }
       if (!u.hasHorse || u.apNow <= 0 || !t || !t.alive) return false;
@@ -479,6 +612,8 @@ window.SJI_ENGINE = (function () {
       return true;
     }
 
+    /* 血祭：花 1 行动点，砍掉当前一半血（血量不足 SAC_MIN_HP 不许祭，「以道代血」除外），
+       换 st.bloodlust + 1——下次伤害翻倍；wonder / 双祭增益可一次叠两层。 */
     async doSacrifice(u) {
       if (u.apNow <= 0 || (!u.boons.bloodFree && u.hp < CFG.RULES.SAC_MIN_HP)) return false;
       u.apNow--;
@@ -499,11 +634,13 @@ window.SJI_ENGINE = (function () {
     }
 
     /* ---------- 技能 ---------- */
+    // 取技能数据：新角色带技能数组 skills（idx 区分第 1/2 个），老角色只有单个 skill。
     skillOf(u, idx) {
       const ch = u.ch;
       if (ch.skills) return ch.skills[idx || 0];
       return ch.skill;
     }
+    // 技能是否就绪：cds 里剩余冷却 ≤0；_startCd 在放完后立刻挂 CD（可被增益缩短）。
     skillReady(u, idx) {
       const sk = this.skillOf(u, idx);
       if (!sk) return false;
@@ -515,12 +652,17 @@ window.SJI_ENGINE = (function () {
       u.cds[idx || 0] = Math.max(1, (sk.cd || 1) - (u.boons.cdReduce || 0));
     }
 
+    /* 施放技能的总入口：先验「有这技吗 / 转好 CD 没 / 行动点够吗 / 被沉默没」，
+       扣点、挂 CD、播报之后按 sk.kind 分五路：
+       unit=单体、self=强化自己、adj=贴身群伤、raoe=远程范围、summon=召唤。
+       每个角色的具体效果写死在 switch(u.charId)——数值在 data.js，行为在这里。 */
     async doSkill(u, idx, target) {
       const sk = this.skillOf(u, idx);
       if (!sk || !this.skillReady(u, idx) || u.apNow < (sk.ap || 1)) return false;
       if (u.st.silence > 0) { this.pushLog("「" + u.ch.hao + "」被沉默，技不能出。"); return false; }
       const k = sk.kind;
       const dyad = !!this.rule && this.rule.id === "dyad";
+      // V：从技能数据取字段、取不到用默认值——手写版的 sk[k] ?? d。
       const V = (k, d) => (sk[k] !== undefined ? sk[k] : d);
       u.apNow -= (sk.ap || 1);
       this.lockUndo();
@@ -532,6 +674,7 @@ window.SJI_ENGINE = (function () {
       const foes = this.opponentsOf(u);
       /* 音克思（开放世界主角）：技能全由「刀谱」所学卡牌数据驱动 */
       if (u.charId === "yinkesi") return this._execLearned(u, sk, target, foes, dyad);
+      // 单体技：目标必须活着；下面 switch 一个角色一种口味，数值对照 data.js 的技能表。
       if (k === "unit") {
         if (!target || !target.alive) return false;
         switch (u.charId) {
@@ -600,6 +743,7 @@ window.SJI_ENGINE = (function () {
           case "hanxiao":
             if (this._passiveImmuneStun(target)) { this.pushLog("不为所动！"); break; }
             if (target.offField > 0) { this.pushLog("「" + target.ch.hao + "」已在家中。"); break; }
+            // 记下被遣返时的位置，offField 倒数归零后从这里归队（见 _returnHome）。
             target.homeR = target.r; target.homeC = target.c;
             target.offField = V("offField", 1);
             this.pushLog("「" + target.ch.hao + "」被遣返回家，跳过下个回合后归位！");
@@ -618,6 +762,7 @@ window.SJI_ENGINE = (function () {
         }
         return true;
       }
+      // 自我强化技：现役只有玉润（回血）与呱屿（+2 行动点、下次伤害 +1）。
       if (k === "self") {
         if (u.charId === "yurun") this.heal(u, 3, "得面包，");
         if (u.charId === "guayu") {
@@ -628,6 +773,7 @@ window.SJI_ENGINE = (function () {
         }
         return true;
       }
+      // 贴身群伤：打所有相邻敌人（.slice() 先复制再遍历，防止边遍历边改动出乱子）。
       if (k === "adj") {
         const adjDmg = V("dmg", 2), poisonR = V("poison", 2);
         for (const f of foes.filter(f => cheb(u, f) <= 1).slice()) {
@@ -636,6 +782,7 @@ window.SJI_ENGINE = (function () {
         }
         return true;
       }
+      // 远程范围技：chebyshev 距离 ≤ range 的敌人各吃一口，效果因角色而异。
       if (k === "raoe") {
         const rng = sk.range || 2;
         for (const f of foes.filter(f => cheb(u, f) <= rng).slice()) {
@@ -658,6 +805,7 @@ window.SJI_ENGINE = (function () {
         if (u.charId === "zichen") this.pushLog("夺话筒：马上解散，毋恐担责，凡有责任，在吾一人！");
         return true;
       }
+      // 召唤技：现役只有崇国种树；树有场上上限（config 的 TREE_CAP），防战斗被无限拖长。
       if (k === "summon") {
         // 树木皆死：场上至多三株，否则战斗会被无限拖长
         const live = this.units.filter(x => x.alive && x.charId === "tree" && x.side === u.side).length;
@@ -687,6 +835,8 @@ window.SJI_ENGINE = (function () {
         if (sk.empower) u.st.empower += sk.empower;
         return true;
       }
+      // 内部小函数 hit：对单个敌人打 base 点，再按卡牌数据追加晕/缴/减行动/推/毒。
+      // 音克思的技能差异全在卡牌数据里，逻辑只有这一份——「数据驱动」的典型写法。
       const hit = async (f, base) => {
         await this.dealDamage(u, f, base, { type: "skill", dyad });
         if (!f.alive) return;
@@ -721,9 +871,16 @@ window.SJI_ENGINE = (function () {
     }
 
     /* ---------- AI ---------- */
+    /* 引擎侧 AI 分两层：普通难度走 aiAct 的「优先级阶梯 + 概率」，噩梦走
+       aiActNightmare 的「枚举落点 × 行动打分取最优」。测试里模拟玩家的机器人在
+       tests/battle/helpers/bot.mjs：greedyBot 一味莽，对高倍率近战近乎 0 分，
+       不能当人类基线；kiteBot 会打完就拉扯、优先残血，平衡测试都以它为准。 */
     _reachable(u, budget) {
+      /* BFS（广度优先搜索）：像水波从脚下逐圈外扩，求 budget 步内可达的全部格子。
+         seen=已访问集合（坐标拼成 "r,c" 字符串当键，顺便去重）；dist=各格最短步数。 */
       const seen = new Set([u.r + "," + u.c]);
       let frontier = [[u.r, u.c]];
+      // 对象键外面包方括号是「计算属性名」：键由表达式算出，这里即起点坐标。
       const dist = { [u.r + "," + u.c]: 0 };
       for (let d = 0; d < budget; d++) {
         const next = [];
@@ -737,9 +894,11 @@ window.SJI_ENGINE = (function () {
         }
         frontier = next;
       }
+      // [...seen]：把 Set 摊开成数组（Set 不能下标访问，转数组才顺手）。
       return { keys: [...seen], dist };
     }
 
+    // 本回合可走格数：基础 1，大展/狸猫被动 2，再叠加增益加成。
     moveRange(u) {
       let mv = 1;
       if (this.hasPassive(u, "dazhan") || this.hasPassive(u, "limo")) mv = 2;
@@ -747,6 +906,7 @@ window.SJI_ENGINE = (function () {
       return mv;
     }
 
+    // 朝目标挪一步：在可达空格里挑「离目标曼哈顿距离最小」的落点，同分取步数更省的。
     _stepToward(u, target) {
       const budget = this.moveRange(u);
       const reach = this._reachable(u, budget);
@@ -761,6 +921,8 @@ window.SJI_ENGINE = (function () {
       return best.split(",").map(Number);
     }
 
+    /* AI 选技能：可怡是奶妈（目标是己方最残血者）；其余角色按 [技 0, 技 1] 的顺序，
+       找第一个「转好 CD、点数够、射程内有敌人」的技能。返回 {idx, target} 或 null。 */
     aiPickSkill(u) {
       const ch = u.ch;
       // 治疗/辅助类技能（如可怡「一糖之恩」）目标应是己方，而非对手
@@ -778,6 +940,7 @@ window.SJI_ENGINE = (function () {
         if (sk.kind === "self") { if (u.hp <= u.maxhp - 2) return { idx: i, target: null }; continue; }
         if (sk.kind === "summon") return { idx: i, target: null };
         const rng = sk.kind === "adj" ? 1 : (sk.range || 2);
+      // adj 按 1 格、raoe 按技能射程先数一遍「够得着的敌人」，随后各类技能分别判定。
         const inRange = foes.filter(f => cheb(u, f) <= (sk.kind === "raoe" ? rng : (sk.kind === "adj" ? 1 : rng)));
         if (sk.kind === "adj") { if (foes.some(f => adj(u, f))) return { idx: i, target: null }; continue; }
         if (sk.kind === "raoe") { if (inRange.length >= (u.charId === "lifan" ? 1 : 1)) return { idx: i, target: null }; continue; }
@@ -793,6 +956,8 @@ window.SJI_ENGINE = (function () {
        每花 1 行动点前，枚举「可站立格 × 可执行行动」并打分：
        分 = 期望输出（击杀重奖）+ 位置价值（城墙/远离威胁）− 落位威胁（玩家侧下一手最大反击）
        取最高分执行。不做深搜索——马刀的深度在位置经济，一层贪心 + 威胁模型已是碾压级。 */
+    /* 威胁估价：假设「我」站在 (r,c)，把每个敌人下一手能打出的最大伤害加总。
+       这是 nightmare AI 给落点打分用的「这里有多危险」尺子。 */
     aiThreatAt(u, r, c) {
       let threat = 0;
       for (const f of this.opponentsOf(u)) {
@@ -816,6 +981,7 @@ window.SJI_ENGINE = (function () {
       return threat;
     }
 
+    // 估算一次刀击的伤害（把主要加成粗抄一遍，给 nightmare AI 打分用）。
     aiEstKnife(att, def) {
       let d = 1;
       if (this.hasPassive(att, "luhao")) d *= 2;
@@ -827,8 +993,11 @@ window.SJI_ENGINE = (function () {
       return Math.max(1, d);
     }
 
+    /* 噩梦 AI 主循环：每花 1 行动点，都重新「枚举落点 × 枚举行动」打分取最优；
+       aiThreatAt / aiEstKnife 就是打分用的两把估尺。一层贪心 + 威胁模型，不做深搜。 */
     async aiActNightmare(u) {
       let guard = 0;
+      // guard：保险丝计数，防「行动点没扣干净」之类的意外把循环变成死循环。
       while (u.apNow > 0 && u.alive && !this.over && guard++ < 10) {
         const foes = this.opponentsOf(u);
         if (!foes.length) break;
@@ -841,6 +1010,7 @@ window.SJI_ENGINE = (function () {
         }
         let best = null;
         for (const cell of cells) {
+          // stand：落点分 = 负威胁（越安全越好）+ 站城墙的小甜头。
           const stand = -this.aiThreatAt(u, cell.r, cell.c) + (isWall(cell.r, cell.c) ? 0.5 : 0);
           // 该格可执行的行动
           const acts = [];
@@ -910,14 +1080,19 @@ window.SJI_ENGINE = (function () {
       }
     }
 
+    /* 通用 AI 回合（普通/极难难度与友军）：一条 if 组成的「优先级阶梯」——
+       每花一次行动点就从头再评估：买刀 > 残血撤退 > 技能 > 血祭 > 刀击 >
+       驱赶/马踢 > 买马 > 逡巡/逼近。各项做不做的概率由 prof（AI_AGGR 档位）给出。 */
     async aiAct(u) {
       // 回合开始状态结算
+      // 被遣返者：本回合不出场，offField 减到 0 就归队（见 _returnHome）。
       if (u.offField > 0) {
         u.offField--; u.apNow = 0;
         if (u.offField <= 0) this._returnHome(u);
         else this.pushLog("「" + u.ch.hao + "」犹在返家途中……");
         return;
       }
+      // 晕眩/被惑：吃掉一层 skip，整回合罢工。
       if (this._tickStatusStart(u)) {
         this.pushLog("「" + u.ch.hao + "」晕眩/被惑，跳过此回合。");
         window.SJI_UI.fxFloat(u, "跳过", "#cccc88");
@@ -926,12 +1101,14 @@ window.SJI_ENGINE = (function () {
       }
       window.SJI_UI.onState();
       await sleep(240);
+      // 噩梦难度在此分岔：整回合交给最优行动 AI；其余难度走下面的概率阶梯。
       if (this.diff === "nightmare") {
         await this.aiActNightmare(u);
         this._tickStatusEnd(u);
         return;
       }
       let guard = 0;
+      // 选 AI 档位：友军固定「主动」；极难强制「狂攻」；其余按关卡配置查 AI_AGGR 表。
       const prof = (u.side === "ally")
         ? CFG.AI_ALLY
         : (this.diff === "extreme" ? CFG.AI_AGGR.frenzy
@@ -963,6 +1140,7 @@ window.SJI_ENGINE = (function () {
           }
         }
         // 技能（按进攻性决定使用意愿）
+        // 技能使用意愿 = 档位基数 + 角色个人进攻性微调（aggr 以 0.6 为基准线）。
         const skillP = Math.max(0.05, Math.min(1, prof.skill + (u.aggr - 0.6) * 0.25));
         if (Math.random() < skillP) {
           const pick = this.aiPickSkill(u);
@@ -1008,6 +1186,9 @@ window.SJI_ENGINE = (function () {
     }
 
     /* ---------- 断点续战：序列化 ---------- */
+    /* 断点续战：把整场战局拍成纯数据快照（每回合末由 _endRound 写入存档）。
+       只存「复原所需最小集」：配置存 stageId（场景参数回头查 config），单位只存
+       战场可变字段——设计目标是引擎能从任意中间状态原样重启。 */
     serialize() {
       return {
         v: 1,
@@ -1036,6 +1217,8 @@ window.SJI_ENGINE = (function () {
       };
     }
 
+    /* 静态方法（Battle.fromSave(...)，不必先 new）：从快照重建一场战斗。
+       先按配置正常 _build 摆好棋，再用快照逐字段覆盖回去，单位按 uid 对齐。 */
     static fromSave(snap, stages) {
       const stg = snap.cfg.stageId ? stages.find(x => x.id === snap.cfg.stageId) : null;
       const cfg = {
@@ -1047,11 +1230,14 @@ window.SJI_ENGINE = (function () {
       };
       const b = new Battle(cfg);
       // 还原单位（按 uid 对齐，缺者忽略，多者丢弃）
+      // uid→快照 的 Map：键值查找是 Map 的本职，比在数组里反复 find 利索。
       const saved = new Map(snap.units.map(u => [u.uid, u]));
       const keep = [];
       for (const u of b.units) {
         const su = saved.get(u.uid);
         if (!su) continue;
+        // Object.assign：把右侧对象的字段批量盖进 u（用存档值覆盖新建值）。
+        // st/boons 先合并默认值再盖存档值——旧存档缺新字段时也不至于 undefined。
         Object.assign(u, {
           hp: su.hp, maxhp: su.maxhp, r: su.r, c: su.c, rx: su.c, ry: su.r,
           alive: su.alive, offField: su.offField, hasKnife: su.hasKnife, hasHorse: su.hasHorse,
@@ -1072,8 +1258,11 @@ window.SJI_ENGINE = (function () {
     }
 
     /* ---------- 行动点 ---------- */
+    /* 算行动点：基础值（猜拳结果）+ 增益 + 临时修正，封顶 AP_CAP。
+       玩家侧附带「以寡敌众」补偿：敌人越多，行动点与血上限的补贴越多。 */
     calcAP(u, base) {
       let ap = base + (u.boons.apBonus || 0);
+      // 上回合积欠的行动点修正（apMod，多为负数）在此兑现，用完即清零。
       ap += u.st.apMod || 0; u.st.apMod = 0;
       // 以寡敌众：每多一名敌人，玩家多得一点行动（至多+3），使一对多仍有输出
       // （极难/噩梦：多人平衡失效——无行动点与血上限补偿）
@@ -1084,6 +1273,7 @@ window.SJI_ENGINE = (function () {
           const bonus = Math.min(O.apCap, (n - 1) * O.apPer);
           ap += bonus;
           const hpBonus = Math.min(O.hpCap, (n - 1) * O.hpPer);
+          // 血上限补贴只在首次多打少时发一次（_outnumberedHp 兼当「已领过」记号）。
           if (!u._outnumberedHp) {
             u._outnumberedHp = hpBonus;
             u.maxhp += hpBonus; u.hp += hpBonus;
@@ -1095,6 +1285,7 @@ window.SJI_ENGINE = (function () {
       return Math.max(0, Math.min(CFG.RULES.AP_CAP, ap));
     }
 
+    // 敌方基础行动点：查难度表；3 名以上敌人用 apBig（人多反而更少，压总输出）。
     enemyBaseAP() {
       const d = CFG.DIFFICULTY[this.diff] || CFG.DIFFICULTY.normal;
       const big = this.living("enemy").length >= 3;
@@ -1107,6 +1298,7 @@ window.SJI_ENGINE = (function () {
       return CFG.AI_AGGR[this.aiAggr] || CFG.AI_AGGR.active;
     }
 
+    // 挑目标：weakest=先打残血（同血比远近），否则就近打；slice() 先复制再排序，不动原数组。
     _pickTarget(u, foes, focus) {
       if (!foes.length) return null;
       if (focus === "weakest") {
@@ -1124,6 +1316,7 @@ window.SJI_ENGINE = (function () {
         if (this.unitAt(r, c)) continue;
         const d = Math.abs(r - threat.r) + Math.abs(c - threat.c);
         const near = this.opponentsOf(u).filter(f => Math.max(Math.abs(f.r - r), Math.abs(f.c - c)) <= 1).length;
+        // 打分：离威胁越远越好（×2），落点旁的敌人越多扣得越狠（×4）。
         const sc = d * 2 - near * 4;
         if (sc > bestScore) { bestScore = sc; best = [r, c]; }
       }
@@ -1142,10 +1335,19 @@ window.SJI_ENGINE = (function () {
     }
 
     /* ---------- 回合循环 ---------- */
+    /* ============================================================
+     * run()：主回合循环——引擎的心跳。一回合的完整时序：
+     *   回合数 +1 → 清「每回合一次」标记 → 剧情触发/特则（飞瓶、种树）→
+     *   回合上限检查 → 起义援军 → await 猜拳（等玩家点弹窗）→ 发行动点 →
+     *   玩家阶段（await 玩家操作）→ 友军各自动一回合 → 敌人各自动 → _endRound 收尾。
+     * 任何一步都可能把 this.over 置真；循环一见 over 就停，返回胜负结果。
+     * ============================================================ */
     async run() {
+      // 把 UI 钩子抓个短名；下面所有 await ui.xxx 都是在「请界面做事」。
       const ui = window.SJI_UI;
       while (!this.over) {
         this.round++;
+        // 「每回合一次」类记号（依然的减伤、首击加成）在回合开头统一复位。
         this.units.forEach(u => u.dampUsed = false);
         if (this.player._undo) this.player._undo.length = 0;
         for (const u of this.units) u._usedFirstStrike = false;
@@ -1177,12 +1379,16 @@ window.SJI_ENGINE = (function () {
           }
         }
         ui.onState();
+        // 30 回合打完仍未分胜负：判负（高考终了，视为败绩）。
         if (this.round > CFG.RULES.MAX_ROUND) { this.finish("timeout"); break; }
         // 起义援军
         if (this.rule && this.rule.id === "uprising" && this.round === 3) await this._spawnReinforcements();
         // 猜拳
+        // 猜拳：引擎把控制权交给 UI 弹窗，玩家点完才 resolve，返回 {res, ap}。
+        // 这是引擎/UI 异步协作的第一处——引擎只要结果，何时给由 UI 决定。
         const rps = await ui.rpsRound(this);
         if (this.over) break;
+        // 发行动点：玩家按猜拳结果，友军固定 2 点，敌人按难度表。
         this.player.apNow = this.calcAP(this.player, rps.ap);
         this.living("ally").forEach(u => u.apNow = this.calcAP(u, 2));
         this.living("enemy").forEach(u => u.apNow = this.calcAP(u, this.enemyBaseAP()));
@@ -1200,6 +1406,8 @@ window.SJI_ENGINE = (function () {
           ui.onState();
           if (ui.banner) await ui.banner("此回合跳过", 900);
         } else {
+          // 玩家操作阶段：battle-ui.js 会把 resolve 函数暂存进 _phaseResolve，
+          // 直到玩家点「结束回合」才兑现这个 Promise——引擎在此冻结等操作。
           await ui.playerPhase(this);
         }
         // 缴械与沉默只封"本回合"，到此解除（否则会永久封锁）
@@ -1216,6 +1424,8 @@ window.SJI_ENGINE = (function () {
       return this.result;
     }
 
+    /* 起义特则：第 3 回合，两名 9 血心腹在玩家附近入场。
+       小细节：ui_onState 声明在使用之后——函数声明会「提升」所以能跑，但别学。 */
     async _spawnReinforcements() {
       this.pushLog("—— 起义！子琛之心腹二人入场：马上解散，毋恐担责！——");
       for (let i = 0; i < 2; i++) {
@@ -1230,6 +1440,7 @@ window.SJI_ENGINE = (function () {
       function ui_onState() { window.SJI_UI.onState(); }
     }
 
+    // 从 (r,c) 起一圈圈向外扩找空位（螺旋找位），实在没有就全图随机。
     _freeNear(r, c, maxD) {
       for (let d = 1; d <= maxD + 3; d++) {
         for (let dr = -d; dr <= d; dr++) for (let dc = -d; dc <= d; dc++) {
@@ -1240,6 +1451,7 @@ window.SJI_ENGINE = (function () {
       return this._randomFree();
     }
 
+    /* 遣返归队：优先回原位（homeR/homeC）；被占则全图找最近的空格落脚。 */
     _returnHome(u) {
       if (!u.alive) return;
       const hr = (u.homeR !== undefined) ? u.homeR : u.r;
@@ -1274,6 +1486,8 @@ window.SJI_ENGINE = (function () {
       if (u.st.silence > 0) u.st.silence--;
     }
 
+    /* 剧情对话触发器两姊妹：_fireTriggers 是 async（可 await 依次播），
+       _checkTriggers 是同步（伤害结算中途调用，不能打断流程）；都只触发一次。 */
     async _fireTriggers(when) {
       for (const t of this.triggers) {
         if (t.fired || t.when !== when) continue;
@@ -1294,6 +1508,8 @@ window.SJI_ENGINE = (function () {
       }
     }
 
+    /* 回合收尾，按顺序结算：回血类被动 → 毒/近身被动掉血 → 技能冷却 −1 →
+       剧情特则（验算/争食/鲍鱼之肆）→ 写续战存档 → 检查战斗是否结束。 */
     async _endRound() {
       this._trackMinHp(this.player);
       // 回合结束被动
@@ -1310,6 +1526,7 @@ window.SJI_ENGINE = (function () {
           const foes = this.opponentsOf(u).filter(f => adj(u, f));
           for (const f of foes) { this.rawHurt(f, 1, "近鲍鱼之肆而受毒"); await sleep(120); }
         }
+          // 中毒：先扣回合数再掉 1 血，剩几回合就疼几回合。
         if (u.st.poison > 0) {
           u.st.poison--;
           this.rawHurt(u, 1, "毒发");
@@ -1329,6 +1546,7 @@ window.SJI_ENGINE = (function () {
       }
       // 剧情特则：争食（二楼巡征）——场上三份饭，回合结束站在饭上者食之
       if (this.rule && this.rule.id === "zhengshi") {
+          // 三份饭的固定坐标（首次用到才初始化；被吃掉即从名单上划去）。
         if (!this._food) this._food = [[1, 3], [3, 3], [5, 3]];
         this._food = this._food.filter(([r, c]) => {
           const u = this.unitAt(r, c);
@@ -1358,6 +1576,7 @@ window.SJI_ENGINE = (function () {
       await this._checkBattleEnd();   // 必须等待：增益选择等弹层需在下一回合猜拳前结束
     }
 
+    /* 胜负判定：玩家倒下即负；敌人清空时——多波关卡/生存模式进下一波，否则获胜。 */
     async _checkBattleEnd() {
       if (this.over) return;
       const foes = this.living("enemy");
@@ -1371,6 +1590,9 @@ window.SJI_ENGINE = (function () {
       }
     }
 
+    /* 下一波：生存模式=先选增益→小回 3 血→生成随波次变强的敌人；
+       剧情模式=阵间休整（restFull 回满，否则回血上限 60%）→按 hpScale 调血放入新敌。
+       收尾统一清掉玩家身上的负面状态。 */
     async _nextWave() {
       this.waveIndex++;
       if (this.mode === "survival") {
@@ -1381,6 +1603,7 @@ window.SJI_ENGINE = (function () {
         this.pushLog("—— 第" + this.survivalWaveNo + "波将至，苔藓不尽…… ——");
         this.heal(this.player, 3, "战间休整，");
         const ids = this._survivalWave(this.survivalWaveNo);
+          // 敌人血量每深一波 +5%。
         const scale = 1 + 0.05 * (this.survivalWaveNo - 1);
         ids.forEach((id, i) => {
           const m = makeUnit(id, "enemy", 200 + this.waveIndex * 10 + i);
@@ -1398,6 +1621,7 @@ window.SJI_ENGINE = (function () {
           this.pushLog("—— 下一阵！赛事之间，得以充分休整。——");
           this.heal(this.player, this.player.maxhp, "充分休整，");
         } else {
+          // 阵间休整：至少回 4 点，否则回血上限的 60%（向上取整）。
           const rest = Math.max(4, Math.ceil(this.player.maxhp * 0.6));
           this.pushLog("—— 下一阵！阵间休整回复" + rest + "血。——");
           this.heal(this.player, rest, "阵间休整，");
@@ -1423,12 +1647,15 @@ window.SJI_ENGINE = (function () {
       Object.assign(p.st, { skip: 0, poison: 0, apMod: 0, disarm: 0, silence: 0, seal: 0 });
     }
 
+    // 新敌人出生点：优先「离玩家曼哈顿 ≥3」的标准出生位，实在没有就近塞。
     _freeSpawnFar() {
       const spots = SPAWNS.filter(s => this.passable(s[0], s[1]) && manh({ r: s[0], c: s[1] }, this.player) >= 3);
       if (spots.length) return spots[Math.floor(Math.random() * spots.length)];
       return this._freeNear(0, 3, 3);
     }
 
+    /* 生存模式选中的增益落地：往 boons 表写「永久修正值」，各结算处按需读取
+       （如 calcDamage 读 boons.knife、moveRange 读 boons.move、calcAP 读 boons.apBonus）。 */
     _applyBoon(u, boon) {
       this.boonsTaken.push(boon.id);
       switch (boon.id) {
@@ -1451,6 +1678,7 @@ window.SJI_ENGINE = (function () {
       this.pushLog("得增益「" + boon.name + "」：" + boon.desc);
     }
 
+    /* 终局：钉死 over/result，清掉续战存档，播报战果并通知 UI 弹结算。 */
     finish(result) {
       if (this.over) return;
       this.over = true;
@@ -1461,5 +1689,6 @@ window.SJI_ENGINE = (function () {
     }
   }
 
+  // IIFE 的「出口」：只有这个对象上的名字能被外界访问，其余都是模块内部零件。
   return { Battle, isWall, inB, cheb, manh, adj, SIZE, makeUnit };
 })();

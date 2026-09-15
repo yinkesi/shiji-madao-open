@@ -2,6 +2,33 @@
  * 实验史记 · 马刀风云 —— 数据卷
  * 据音克思《实验史记》改编 · 卷八《马刀书》为玩法蓝本
  * ============================================================ */
+/* ============================================================
+ * 【新手导读】SJI_DATA —— 游戏的"数据卷"，数值与文案都在这。
+ *
+ * 【这个文件是干嘛的】33 张角色战斗卡（CHARACTERS）、25 个剧情关卡
+ *   （STAGES：十五卷主线 + 序章 + "其二"支线）、27 条成就
+ *   （ACHIEVEMENTS）、15 条生存模式增益（BOONS，其中 6 条 rare: true
+ *   的稀有增益）、乱斗地图名（FREE_MAPS）。
+ * 【架构位置】battle 层的地基，index.html 正常加载。engine.js 读角色
+ *   数值与被动开关，battle-ui.js 读关卡/成就/增益来摆界面，
+ *   save.js 也反向查它的关卡表补解锁。
+ * 【暴露的全局名】window.SJI_DATA = { CHARACTERS, PLAYABLE, STAGES,
+ *   ACHIEVEMENTS, BOONS, FREE_MAPS }。
+ * 【新手阅读提示】角色卡字段速查（以实际字段为准）：
+ *   id / name / hao / juan / glyph / color —— 唯一 id、姓名、称号、
+ *     出处卷、棋盘头像字、主题色；全项目靠 id 串起台词、关卡、存档。
+ *   hp 生命上限；boss / mob / playable 是否 BOSS / 杂兵 / 可操作；
+ *   aggr AI 进攻性 0~1，越大越好战。
+ *   passive 被动：name/desc 是给玩家看的文案，其余键（wallBonus、
+ *     dodge、lethalKeep…）是效果开关——引擎 hasPassive(u, id) 判定
+ *     拥有后，按这些键取数值生效。
+ *   skill 技能：kind 决定目标方式（unit=单体·range 格内 / self=自身 /
+ *     adj=周身一格 AOE / raoe=range 格内全体 / summon=召唤随从），
+ *     ap 消耗行动点、cd 冷却回合数，dmg / stun / push / heal / apCut /
+ *     seal / disarm / empower 等是效果参数；个别角色（崇国）用 skills
+ *     数组带多个技能。
+ *   quote / bio —— 史书体引文与小传，纯展示文案。
+ * ============================================================ */
 window.SJI_DATA = (function () {
   "use strict";
 
@@ -9,16 +36,27 @@ window.SJI_DATA = (function () {
    * 每人：名、号、出处卷、色、字、血、被动、技能
    * kind: unit=单体 range内 / self=自身 / adj=自身周身AOE / raoe=范围AOE / enemy-all=全场敌方
    */
+  /* 角色表用"对象字典"组织：键就是角色 id（dage、wanzhen…），
+     任何地方找角色都是 CHARACTERS["某id"]。想看某角色：Ctrl+F 搜 id 或名字。 */
   const CHARACTERS = {
     /* ============ 可操作 · 十七人 ============ */
+    /* ============ 代表性角色卡 · 字段级注释 ①：常规可操作角色 ============ */
     dage: {
+      // 第一行是"身份六件套"：id 唯一键、name 本名、hao 称号、juan 出处卷、
+      // glyph 棋盘头像字、color 主题色；下一行 hp 是生命上限。
       id: "dage", name: "贾瀚元", hao: "大哥", juan: "卷一", glyph: "哥",
       color: "#c06a2c", hp: 10,
+      // 被动：name/desc 给玩家看；wallBonus: 1 是引擎真正读的效果开关
+      // （hasPassive 判出"是大哥"后，站城墙时刀击 +1，数值取 wallBonus）。
       passive: { name: "城墙之梦", desc: "立于城墙时，刀击伤害+1。（梦破败城墙，苔藓覆其上，终无尽头）", wallBonus: 1, },
+      // 技能：kind "unit" = 指定单体、range 3 格内可选；ap 2 耗两行动点；
+      // dmg 1 打 1 伤、stun 1 令其下回合跳过；cd 3 用完冷却三回合。
       skill: { name: "护手霜之赠", kind: "unit", range: 3, ap: 2,  dmg: 1, stun: 1,cd: 3,
         desc: "距三内一敌受1伤，且下回合跳过。（此乃吾心意也，敬请笑纳——歆慧无语）" },
+      // quote（史书体引文）与 bio（小传）是纯展示文案，不影响战斗。
       quote: "大哥者，贾瀚元也，其父任于海大，其母亦然。",
       bio: "实验三异能者之首。为兵谴数十人搬书，及还，谓哥曰：尔搬何书？对曰：吾名为贾瀚元。善之韫、歆慧、梦晨，高考后皆以护手霜与原话表白之。",
+      // playable: true 才能被玩家选用；aggr 是 AI 代打时的进攻性（0~1）。
       playable: true, aggr: 0.7
     },
     shenren: {
@@ -233,13 +271,20 @@ window.SJI_DATA = (function () {
       bio: "级部主任，深恶看闲书者。收头哥之书，通报于电子班牌。令绍歆互相揭发而自破，绍歆不语，卒予二人记过。",
       playable: false, aggr: 0.7
     },
+    /* ============ 代表性角色卡 · 字段级注释 ②：多技能 BOSS ============ */
     chongguo: {
       id: "chongguo", name: "王崇国", hao: "校长", juan: "卷十四", glyph: "国",
+      // BOSS 卡：boss: true 标记身份（血量不受乱斗倍率影响等），
+      // playable: false 即玩家不可操作，只能当对手。
       color: "#2f3d2f", hp: 11, boss: true,
+      // 免死型被动：lethalKeep: 3 —— 受致命伤时保留血量并回复的数值开关。
       passive: { name: "弃车保帅", desc: "每场一次，致命伤时保留1血并回复3血。（居二中之时，事败，辄弃车保帅以自全）", lethalKeep: 3, },
+      // skills 数组：个别角色身怀多技（全表仅崇国），引擎按冷却轮换使用。
       skills: [
+        // raoe + range 99 ≈ 全场范围技：所有敌人受影响。
         { name: "评职称", kind: "raoe", range: 99, ap: 2, cd: 3,
           desc: "所有敌人本回合不能施技。（不为班主任者不得评职称——一出，天下皆惊）" },
+        // summon：召唤随从技。"树"的场上数量受 config.RULES.TREE_CAP 限制。
         { name: "种树", kind: "summon", ap: 1, cd: 3,
           desc: "召唤一名'树'随从。（多种树木，树木皆死，时人谓之种树校长）" }
       ],
@@ -345,11 +390,24 @@ window.SJI_DATA = (function () {
   };
 
   /* 初始可用：第一卷从大哥写起（见原书《序》）。其余角色随剧情"立传"解锁。 */
+  // 注意：STARTERS 是 IIFE 内的局部常量，不在末尾 return 里——外部拿不到
+  // SJI_DATA.STARTERS，存档侧是把 dage 直接写死在默认 unlocked 里的。
   const STARTERS = ["dage"];
+  // 可操作角色全名单（18 人）。存档的「人人有传」成就按它逐人检查胜场。
   const PLAYABLE = ["dage","shenren","xiannv","touge","lifan","wonder","wenbin","yurun","luhao","xiaochuan","guyin","zichen","shaoming","xinhui","guayu","yiran","dazhan","wanzhen"];
 
   /* ---------------- 剧情关卡（十五卷 + 序章） ---------------- */
+  /* 关卡数组，每项字段速查：
+     id / juan / title   关卡 id（scenes.js 台词卷按它挂剧本）/ 卷名 / 标题
+     intro / tip         战前引言与攻略提示（关卡选择页展示）
+     enemies             敌方角色 id 列表；配了 waves 则分波连战（阵间回血）
+     allies              友军 id 列表；rule 剧情特则 { id, desc }（如 dyad 情比金坚）
+     unlocks             通关后立传解锁的角色；hpScale 敌方血量整体倍率；
+     restFull            连战间隙回满状态；blocked 不可通行格 [行, 列]；
+     terrain             障碍的画法名（desk/pillar…，由 UI 侧消费）
+     outro / yueks       通关引文与「音克思曰」评语 */
   const STAGES = [
+    // 第一关（教学）：对手仅万震一人，intro 兼当规则说明书。
     {
       id: "s0", juan: "序章", title: "马刀书",
       intro: "wonder引马刀于TGO，于体育课玩，于是马刀得散。规则至简，而引人入胜。世界马刀协会既立，奉wonder为马刀之神。今汝初执马刀，对手乃潜心至学之万震——无多事，善。",
@@ -397,6 +455,7 @@ window.SJI_DATA = (function () {
       id: "s3b", juan: "卷三·其二", title: "运动会",
       intro: "秋季运动会。绍铭存歆慧手链于袖，观其入场。今日之绍铭，不怒自威——他刚在级部榜上名列前茅。",
       tip: "此时的绍铭已被加强：血11、纸条3伤。勿令其半血以下，被动『不怒自威』会加伤。",
+      // hpScale：本关敌方血量整体倍率——支线强敌专用（血 11 → 约 12.6 再取整）。
       enemies: ["shaoming"], allies: [], rule: null, hpScale: 1.15,
       blocked: [[1, 2], [1, 4], [5, 2], [5, 4]], terrain: "cabinet",
       outro: "运动会既散，绍铭窃置手链于歆慧口袋。歆慧归家乃视之，以QQ问曰：手链？二人遂和好如初。",
@@ -580,6 +639,9 @@ window.SJI_DATA = (function () {
   ];
 
   /* ---------------- 成就 ---------------- */
+  /* 名册表：id 给解锁代码引用、name/desc 给界面展示。判定逻辑散在
+     engine / battle-ui / save 各处（如 a_1hp 在残血获胜时解锁），
+     这里只登记"有哪些成就"。 */
   const ACHIEVEMENTS = [
     { id: "a_first", name: "初执马刀", desc: "完成第一场战斗的胜利。" },
     { id: "a_tutorial", name: "协会列席", desc: "通关序章·马刀书。" },
@@ -611,7 +673,16 @@ window.SJI_DATA = (function () {
   ];
 
   /* ---------------- 生存模式增益 ---------------- */
+  /* BOONS：生存模式过关后"三选一"的增益池。字段：id（引擎/存档引用它）、
+     name/desc（展示）、可选 rare 标记——true 的稀有增益与普通增益分开
+     抽取、每局最多出现一次。注意：稀有增益没有单独的表，就以 rare: true
+     混在本池里；js/blades.js 另有一套 Blades.RARE_BOONS 稀有"刀卡"
+     （战前携带道具），那是另一套体系，勿混淆。引擎 applyBoons 把 id
+     翻译成棋子身上的 boons 字段后生效。 */
   const BOONS = [
+    /* ---- 代表性增益 · 字段级注释 ①：普通增益 ---- */
+    // id "b_hp"：引擎读到它就执行"生命上限 +2 并回 2 血"；
+    // desc 里括号内的文言是风味小注，界面原样展示。
     { id: "b_hp", name: "奋进新征程", desc: "生命上限+2并回复2血。（八千余字，其志甚坚）" },
     { id: "b_knife", name: "刀锋所向", desc: "刀击伤害+1。（买刀）" },
     { id: "b_horse", name: "马踏连营", desc: "马踢伤害+1。（买马）" },
@@ -623,6 +694,9 @@ window.SJI_DATA = (function () {
     { id: "b_ap", name: "下课铃响", desc: "每回合行动点+1。（故走往饭，此自然之理也）" },
 
     /* ---- 稀有（质变型）：每局最多出现一次 ---- */
+    /* ---- 代表性增益 · 字段级注释 ②：稀有增益 ---- */
+    // rare: true 使它进稀有池（每局至多出现一次）；效果"血祭免损血"——
+    // config.js 的 RULES.BLOOD_FREE_BOON 存的就是这个 id，引擎据此放行低血量血祭。
     { id: "b_bloodfree", rare: true, name: "以道代血", desc: "血祭不再损血，只耗行动点。（道之所在，血不轻洒）" },
     { id: "b_cleave", rare: true, name: "刀扫一片", desc: "刀击同时波及相邻的另一名敌人。（马刀本是横扫之术）" },
     { id: "b_horsereach", rare: true, name: "长杆马刀", desc: "马踢射程+1（同城四格之内皆可踢）。（加长一寸，强出一分）" },
@@ -632,9 +706,11 @@ window.SJI_DATA = (function () {
   ];
 
   /* ---------------- 乱斗地图名 ---------------- */
+  // 乱斗（自由对战）可选地图，目前只有一张标准场——留好了扩充位。
   const FREE_MAPS = [
     { id: "standard", name: "实验标准场", desc: "中空地，外城墙，正经马刀场。" }
   ];
 
+  // 对外接口：公开这六张表；STARTERS 等局部常量不外借（见上）。
   return { CHARACTERS, PLAYABLE, STAGES, ACHIEVEMENTS, BOONS, FREE_MAPS };
 })();

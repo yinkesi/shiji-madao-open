@@ -3,7 +3,62 @@
    合 槽只收 评（采访所得）；直笔/曲笔影响后果。 */
 'use strict';
 
+/* ================================================================
+   【这张表是干嘛的】
+   撰史玩法与主线时间表，共三份：SLOTS 是起承转合四个作文槽的
+   规则；VOLS 是 15 卷传记的“配方 + 奖励 + 门禁”；CHAPTERS 是
+   17 章（序章 + 15 章正传 + 终章）的日历与标题。
+
+   【被谁消费】
+   - js/writing.js  撰史面板：按 SLOTS 校验标签能否入槽、按 VOLS
+     检查 minWen/needFavor 能否发表，发表后发 rep/money/favor 奖励、
+     播 after 收尾对话；
+   - js/engine.js  chDef() 读 CHAPTERS[G.ch] 得到本章的日期与标题；
+   - js/main.js  章节推进，以及序章/终章的起始场景（CHAPTERS 的
+     scene 字段）；
+   - VOLS 的 cast/favor 里的人物 id 指向 data/people.js，pool 里的
+     史料 id 指向 data/events.js 的 SHARDS。
+
+   【SLOTS 字段字典】
+   key     槽位键（qi/cheng/zhuan/he，存档按它记“这槽放了哪张卡”）；
+   tag     槽位显示名（起/承/转/合）；
+   prefer  偏好标签：史料的 tags 命中就按 1.5 倍计分；
+   only    硬门槛：只收带这些标签的卡（“合”槽 only:['评']）；
+   label   面板上的槽位全名。
+
+   【VOLS 字段字典】
+   no        卷号（1~15，第 15 卷是二中番外）；
+   title/i   卷题与卷号汉字（'第一'，判词画面排版用）；
+   cast      传主人物 id 数组（data/people.js 的 id；cast[0] 是
+             主传主，直笔会扣他 4 点好感、曲笔加 4）；
+   pool      本卷“预期史料”清单（SHARDS 的 id）——缺料也能发表，
+             只是凑不满四槽、得分低；
+   duel      立传战门禁字段：早期版本须先打赢传主才能发表该卷。
+             现已降级为可选支线——writing.js 的 duelReady() 恒返回
+             true，不打赢照样立传；duelWon() 只用 Blades.hasCard(v.duel)
+             （查刀谱里有没有他的战斗卡）做“可切磋”的软提示，
+             字段因此保留；
+             ※ duel 填的是战斗层刀卡 id（js/battle/data.js 的
+             CHARACTERS），大多与 people.js 相同，个别不同：
+             如第 11 卷的 'guyin'（顾一）在世界层叫 zhiyin；
+   minWen    发表门槛：文笔 G.wen 必须达到才能发表；
+   rep/money 发表奖励：声望与零花钱（直/曲笔还会对声望 ±2）；
+   favor     发表时给相关人物加的好感 {人物id: 点数}（可为负，
+             如卷十四写校长是 -4）；
+   needFavor 可选门禁 {id, v, hint}：某人好感 ≥ v 才能发表，
+             不达标就弹 hint 提示语（卷三、六、十在用）；
+   after     发表后的收尾小剧本 [{who, text}]（“看看传主反应”）。
+
+   【CHAPTERS 字段字典】
+   id      章节号（0~16；存档 G.ch 就是这个下标）；
+   days    本章游戏内天数（决定这章能过几天）；
+   date    日期横幅文案；title/sub 章节标题与副题；
+   scene   可选：本章的起始/专属场景（目前仅序章 library、
+           终章 gate 用到，其余章不写）。
+   ================================================================ */
+
 /* slot 偏好 tag：匹配 ×1.5 */
+/* 四个槽按顺序计分：起承转各收事/言/趣，“合”槽只收采访“评”卡。 */
 const SLOTS = [
   { key:'qi',  tag:'起', prefer:['事'],      label:'起 · 开篇立人' },
   { key:'cheng',tag:'承', prefer:['事','趣'], label:'承 · 行事始末' },
@@ -11,7 +66,14 @@ const SLOTS = [
   { key:'he',  tag:'合', prefer:['评'], only:['评'], label:'合 · 音克思曰' },
 ];
 
+/* 卷目主表：数组，每卷一个对象，15 条按 no 排序。
+   下面拿卷一做逐字段示例，其余各卷结构相同。 */
 const VOLS = [
+/* no=卷号；title/i=卷题与卷号汉字；cast=传主（people.js 的 id）；
+   pool=预期史料（SHARDS 的 id）；duel=成传战刀卡 id（立传已不强制
+   打赢，此字段现在只作“可切磋”软提示，详见文件头字典）；
+   minWen=文笔门槛；rep/money=声望/零花钱奖励；
+   favor=发表时给各人加的好感；after=发表后的收尾台词。 */
 { no:1, title:'大哥神人仙女列传', i:'第一', cast:['dage','shenren','xiannv'],
   pool:['sh_shuban','sh_fengshan','sh_alarm','sh_cream','sh_wall','sh_xianvoice'],
   duel:'dage',
@@ -92,10 +154,13 @@ const VOLS = [
   minWen:32, rep:8, money:10, favor:{shengxiang:10,qiyue:10,ziye:6,lianqi:6},
   after:[{who:'旁白',text:'番外立。喜怒皆真。使后来者知：流言可以离友，猜疑可以成仇。'}] },
 ];
+/* 反查索引：卷号 → 卷配置（writing.js 的发表/判词流程都从这取）。 */
 const VOL_BY_NO = {};
 VOLS.forEach(v => VOL_BY_NO[v.no] = v);
 
 /* ============ 章节（时间线） ============ */
+/* 章节日历：id 0~16 共 17 章。存档 G.ch 就是当前章的下标；
+   序章固定在图书馆、终章固定在校门口（scene 字段），其余章不写。 */
 const CHAPTERS = [
 { id:0, days:2, date:'二〇二四 · 高三前夜', title:'序 · 拾遗', sub:'图书馆里，起意重写一部史。', scene:'library' },
 { id:1, days:3, date:'高二 · 九月', title:'卷一 · 三异能者', sub:'分科入六班。风扇、闹钟与护手霜。' },
