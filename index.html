@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>实验史记·马刀行</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="theme-morning">
+
+<!-- 标题页 -->
+<div id="screen-title" class="screen">
+  <div class="title-bg" aria-hidden="true"></div>
+  <div class="title-seal" aria-hidden="true">刀</div>
+  <div class="title-main">
+    <div class="title-vert">
+      <h1 class="title-book">实验史记</h1>
+      <div class="title-sub">马刀行</div>
+    </div>
+    <p class="title-tagline">开放校园，四处游历；来呀来呀，以刀会友。</p>
+    <div class="title-menu">
+      <button class="btn btn-primary" id="btn-new">开卷 · 新的史官</button>
+      <button class="btn" id="btn-continue">继续上局</button>
+      <button class="btn btn-ghost" id="btn-import-title">导入存档</button>
+    </div>
+    <div class="title-foot">据 音克思《实验史记》改编 · 卷里卷外，皆是少年</div>
+  </div>
+</div>
+
+<!-- 游戏主界面 -->
+<div id="screen-game" class="screen hidden">
+  <canvas id="world"></canvas>
+
+  <!-- 顶部玻璃 HUD -->
+  <header id="hud" class="glass">
+    <div class="hud-left">
+      <button class="hud-chip hud-title" id="btn-hud-book" title="翻开史记">
+        <span class="seal-mini">史</span>
+        <span class="hud-bookname">史记</span>
+      </button>
+      <div class="hud-chip" id="hud-date">
+        <span id="hud-date-main">高二上 · 第一周</span>
+        <span id="hud-period">早读</span>
+      </div>
+    </div>
+    <div class="hud-right">
+      <div class="hud-chip stat" id="hud-ap" title="行动点">⚡<b id="hud-ap-v">3</b></div>
+      <div class="hud-chip stat" id="hud-wen" title="文笔">✒<b id="hud-wen-v">5</b></div>
+      <div class="hud-chip stat" id="hud-rep" title="声望">☘<b id="hud-rep-v">50</b></div>
+      <div class="hud-chip stat" id="hud-money" title="零花钱">◉<b id="hud-money-v">10</b></div>
+      <button class="hud-chip icon" id="btn-bag" title="行囊">囊</button>
+      <button class="hud-chip icon" id="btn-menu" title="系统">☰</button>
+    </div>
+  </header>
+
+  <!-- 今日风闻（活动热点提示） -->
+  <div id="hearsay" class="glass">
+    <div class="hearsay-title">今日风闻</div>
+    <div id="hearsay-list"></div>
+  </div>
+
+  <!-- 底部地点导航条 -->
+  <nav id="placelist" class="glass"></nav>
+
+  <!-- 交互提示条 -->
+  <div id="ctxbar" class="glass hidden"></div>
+</div>
+
+<!-- 通用面板（图鉴/成就/系统/史记/行囊） -->
+<div id="panel" class="sheet hidden">
+  <div class="sheet-grabber"></div>
+  <div class="sheet-head">
+    <h2 id="panel-title">面板</h2>
+    <button class="btn-icon" id="panel-close">✕</button>
+  </div>
+  <div class="sheet-body" id="panel-body"></div>
+</div>
+<div id="scrim" class="hidden"></div>
+
+<!-- 对话层 -->
+<div id="dialog" class="hidden">
+  <div id="dialog-cast"></div>
+  <div id="dialog-box" class="glass-dark">
+    <div id="dialog-name"></div>
+    <div id="dialog-text"></div>
+    <div id="dialog-choices"></div>
+    <button id="dialog-next">▸</button>
+  </div>
+</div>
+
+<!-- 小游戏层 -->
+<div id="minigame" class="hidden">
+  <canvas id="mg-canvas"></canvas>
+  <div id="mg-hud" class="glass"></div>
+</div>
+
+<!-- 章节转场 -->
+<div id="chapter-card" class="hidden">
+  <div class="cc-inner">
+    <div class="cc-date" id="cc-date"></div>
+    <h1 class="cc-title" id="cc-title"></h1>
+    <div class="cc-sub" id="cc-sub"></div>
+  </div>
+</div>
+
+<!-- 马刀战场覆盖层 -->
+<div id="battle" class="hidden">
+  <!-- 战场 -->
+  <div id="battle-stage">
+    <div class="btl-top">
+      <h2 id="battle-title">马刀场</h2>
+      <div class="crumb" id="round-no">第 1 回合</div>
+      <div class="btl-tools">
+        <span class="stat-inline" id="ai-label"></span>
+        <button class="btn btn-small" id="b-speed">速×1</button>
+        <button class="btn btn-small" id="b-mute">音</button>
+        <button class="btn btn-small" id="b-surrender">认输</button>
+        <button class="btn btn-small" id="b-exit">离场</button>
+      </div>
+    </div>
+    <div id="battle-wrap">
+      <div id="battle-left">
+        <div id="canvas-outer">
+          <canvas id="battle-canvas"></canvas>
+          <div class="phase-banner" id="phase-banner"></div>
+        </div>
+        <div id="player-card">
+          <span class="tokenface" id="pc-face">·</span>
+          <div style="flex:1;min-width:0">
+            <div id="pc-name"></div>
+            <div class="hpbar-outer"><div class="hpbar-ghost" id="pc-hp-ghost"></div><div class="hpbar-inner" id="pc-hp-in"></div><div class="hpbar-text" id="pc-hp-tx"></div></div>
+            <div class="ap-pips" id="ap-pips" title="行动点"></div>
+            <div class="st-chips" id="pc-st"></div>
+          </div>
+        </div>
+        <div class="actbar">
+          <button class="btn" id="b-knife">购刀·1动</button>
+          <button class="btn" id="b-horse">购马·1动</button>
+          <button class="btn" id="b-attack">刀击·1动</button>
+          <button class="btn" id="b-horseatk">马踢·1动</button>
+          <button class="btn" id="b-skill">技能</button>
+          <button class="btn" id="b-undo">撤销移动</button>
+          <button class="btn" id="b-blood">血祭</button>
+          <button class="btn" id="b-wait">待机（空格）</button>
+        </div>
+      </div>
+      <div id="battle-right">
+        <div id="enemy-panel"><b>敌军</b><div id="enemy-list"></div></div>
+        <div id="log-panel"><b>战报</b><div id="battle-log"></div></div>
+      </div>
+    </div>
+  </div>
+  <!-- 战斗结算 -->
+  <div id="battle-result" class="hidden">
+    <div id="result-body"></div>
+  </div>
+</div>
+
+<!-- 战斗弹层（猜拳/对话/结算明细） -->
+<div id="modal-mask"><div id="modal-box"></div></div>
+<div id="tooltip"></div>
+
+<!-- Toast -->
+<div id="toasts"></div>
+
+<script src="js/config.js"></script>
+<script src="js/data/people.js"></script>
+<script src="js/data/items.js"></script>
+<script src="js/data/scenes.js"></script>
+<script src="js/data/events.js"></script>
+<script src="js/data/volumes.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/world.js"></script>
+<script src="js/dialog.js"></script>
+<script src="js/writing.js"></script>
+<script src="js/minigames.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/battle/config.js"></script>
+<script src="js/battle/data.js"></script>
+<script src="js/battle/engine.js"></script>
+<script src="js/battle/audio.js"></script>
+<script src="js/battle/save.js"></script>
+<script src="js/battle/scenes.js"></script>
+<script src="js/blades.js"></script>
+<script src="js/battle-ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
