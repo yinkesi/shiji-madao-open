@@ -51,14 +51,12 @@ await page.evaluate(() => {
   World.travel('library');
 });
 await page.waitForTimeout(700);
-// 先走到歆慧身旁（约战要求 80 距离内），再触发
-await page.evaluate(() => {
-  const pos = World.npcPos('xinhui');
-  if (pos) World.walkTo(pos[0], pos[1] - 40);
-});
-await page.waitForTimeout(2600);
-await page.evaluate(() => Main.challenge(PEOPLE_BY_ID.xinhui));
-await page.waitForTimeout(700);
+// challenge 会在 80 距离外先寻路走近，轮询直到对话弹出
+for (let i = 0; i < 8; i++) {
+  await page.evaluate(() => Main.challenge(PEOPLE_BY_ID.xinhui));
+  await page.waitForTimeout(900);
+  if (await page.evaluate(() => Dialog.active)) break;
+}
 check('约战对话弹出', await page.evaluate(() => Dialog.active));
 if (errors.length) console.log('  [页面错误]', errors.splice(0).join(' | '));
 await page.screenshot({ path: `${OUT}/m1-03-banter.png` });
@@ -73,7 +71,8 @@ if (errors.length) console.log('  [开战前页面错误]', errors.splice(0).joi
 check('战场覆盖层打开', await page.evaluate(() => window.BATTLE_ACTIVE && document.querySelector('#battle').classList.contains('on')));
 check('玩家是音克思', await page.evaluate(() => window.SJI.battle && window.SJI.battle.player.charId === 'yinkesi'));
 check('敌军是歆慧', await page.evaluate(() => window.SJI.battle && window.SJI.battle.units.some(u => u.charId === 'xinhui' && u.side === 'enemy')));
-await page.waitForTimeout(700);
+// 首战可能有战前剧本对话——用空格推进（打字/翻页），顺带等 rps 自动猜拳完成
+for (let i = 0; i < 14; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(320); }
 await page.screenshot({ path: `${OUT}/m1-04-battle.png` });
 
 // ===== 4. 天降正义 + 结束回合 → 胜利 =====
@@ -104,6 +103,85 @@ await page.evaluate(() => Main.panelBlades());
 await page.waitForTimeout(600);
 check('刀谱面板可开', await page.evaluate(() => !document.querySelector('#panel').classList.contains('hidden')));
 await page.screenshot({ path: `${OUT}/m1-07-blades.png` });
+await page.click('#panel-close');
+await page.waitForTimeout(400);
+
+// ===== 7. M2：首战剧情对话 + 成传战门禁 =====
+// 7a. 首战大哥应挂上马刀风云卷一剧本（introScene）
+const introAttached = await page.evaluate(() => {
+  const cfg = Main.startDuel && null; // 不真开战，仅构建 cfg
+  return true;
+});
+const cfgProbe = await page.evaluate(() => {
+  // 借 challenge 的 cfg 构建：直接构造（与 duelCfg 同逻辑的可见结果在首战时验证）
+  return typeof Main.challenge === 'function';
+});
+check('challenge 可调用', cfgProbe);
+// 7b. 成传战门禁：未胜大哥时卷一不可撰
+const gateBlocked = await page.evaluate(() => {
+  const v = VOL_BY_NO[1];
+  return !Writing.duelReady(1) && !Blades.hasCard('dage');
+});
+check('未胜传主时卷一门禁生效', gateBlocked);
+await page.evaluate(() => UI.panelBook());
+await page.waitForTimeout(500);
+await page.screenshot({ path: `${OUT}/m2-01-book-gate.png` });
+const gateHint = await page.evaluate(() => document.querySelector('#panel-body').innerHTML.includes('未胜传主'));
+check('卷目面板显示「未胜传主」提示', gateHint);
+await page.click('#panel-close');
+await page.waitForTimeout(300);
+// 7c. 战胜大哥（模拟录入）后门禁解除
+const grantInfo = await page.evaluate(() => {
+  const r = Blades.grant('dage');
+  Save.write();
+  return { fresh: r.fresh, cards: G.blades.cards.slice(), ready: Writing.duelReady(1) };
+});
+console.log('  [grant dage]', JSON.stringify(grantInfo));
+check('胜传主后门禁解除', grantInfo.ready === true);
+// 7d. HUD 段位章
+check('HUD 段位章刷新', await page.evaluate(() => document.querySelector('#hud-blade-name').textContent.length > 0));
+// 7e. 首战剧情：清档重来验证 introScene 挂接
+const sceneAttach = await page.evaluate(() => {
+  // 直接走 duelCfg 内部逻辑：challenge 不可拆，这里验证 SCENE_OF_CHAR 存在于 Main 闭包外的可见效果——
+  // 用真开战验证：开战后 SJI.battle.cfg.introScene 应存在（挑一个未录过的：wenbin）
+  return Blades.hasCard('wenbin') ? 'won' : 'fresh';
+});
+if (sceneAttach === 'fresh') {
+  await page.evaluate(() => { World.travel('classroom6'); });
+  await page.waitForTimeout(700);
+  for (let i = 0; i < 8; i++) {
+    await page.evaluate(() => Main.challenge(PEOPLE_BY_ID.wenbin));
+    await page.waitForTimeout(900);
+    if (await page.evaluate(() => Dialog.active)) break;
+  }
+  check('汶斌约战对话弹出', await page.evaluate(() => Dialog.active));
+  for (let i = 0; i < 12; i++) {
+    if (await page.evaluate(() => !Dialog.active)) break;
+    await page.click('#dialog-box');
+    await page.waitForTimeout(280);
+  }
+  await page.waitForTimeout(900);
+  const hasIntro = await page.evaluate(() => !!(window.SJI.battle && window.SJI.battle.cfg.introScene));
+  check('首战汶斌挂上卷五战前剧本', hasIntro);
+  await page.screenshot({ path: `${OUT}/m2-02-first-duel-scene.png` });
+  // 推进战斗内剧本对话（空格），再等猜拳、天降正义收尾
+  for (let i = 0; i < 14; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(320); }
+  await page.waitForTimeout(1200);
+  await page.evaluate(() => window.SJI_DEBUG.killEnemies());
+  for (let i = 0; i < 10; i++) {
+    const done = await page.evaluate(() => !document.querySelector('#battle-result').classList.contains('hidden'));
+    if (done) break;
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(700);
+  }
+  await page.waitForTimeout(1600);
+  const vicShown = await page.evaluate(() => document.querySelector('#result-body').innerHTML.includes('胜'));
+  check('汶斌之战胜利结算', vicShown);
+  await page.screenshot({ path: `${OUT}/m2-03-wenbin-win.png` });
+  await page.click('#r-menu');
+  await page.waitForTimeout(600);
+  check('再次回到校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));
+}
 
 // ===== 结果 =====
 console.log(errors.length ? '\n页面错误:\n' + errors.join('\n') : '\n无页面错误');

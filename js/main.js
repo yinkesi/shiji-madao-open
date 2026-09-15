@@ -8,9 +8,29 @@ const Main = (() => {
     if (G.duelsLost == null) G.duelsLost = 0;
     if (!G.blades) G.blades = { cards: [], equip: null };
     if (!G.duelDone) G.duelDone = {};
+    if (!G.flags) G.flags = {};
+    if (G.flags.duelBanDays == null) G.flags.duelBanDays = 0;
   }
 
   /* ---------- 马刀：约战 / 结算 ---------- */
+  /* 首败即首战：角色 → 马刀风云剧本卷（战前/战胜/战败台词自动接上） */
+  const SCENE_OF_CHAR = {
+    wanzhen: 's0', dage: 's1', shenren: 's1', xiannv: 's1', hanxiao: 's2',
+    shaoming: 's3', xinhui: 's3', shibo: 's4', weirong: 's4', wonder: 's5',
+    wenbin: 's5', dazhan: 's6', touge: 's7', luhao: 's8', xiaochuan: 's8',
+    guayu: 's9', yiran: 's9', zichen: 's10', guyin: 's11', lifan: 's12',
+    limo: 's13', xiangdong: 's13', chongguo: 's14', qinfa: 's14',
+    shengxiang: 's15', qiyue: 's15', ziye: 's15', lianqi: 's15',
+  };
+  /* 特殊战场（据马刀风云原关卡地形） */
+  const DUEL_SPECIAL = {
+    chongguo: {  // 卷十四 · 终焉之战：校长携钦法，为兵助阵
+      enemies: ['qinfa', 'chongguo'], allies: ['weibing'],
+      stage: { id: 's14', blocked: [[2, 3], [4, 3]], terrain: 'cabinet', hpScale: 0.78 },
+      title: '终焉之战 · 校长室',
+    },
+  };
+
   function duelDiff() {
     const d = (window.SJI_SAVE && SJI_SAVE.settings.lastDiff) || 'normal';
     return ['easy', 'normal', 'hard', 'extreme'].includes(d) ? d : 'normal';
@@ -18,15 +38,62 @@ const Main = (() => {
 
   function duelCfg(p, opts) {
     Blades.registerChar();
-    return Object.assign({
+    const id = p.id;
+    const sp = DUEL_SPECIAL[id];
+    const first = !Blades.hasCard(id);
+    const cfg = Object.assign({
       mode: 'story',
       title: (p.hao || p.name) + ' · 马刀场',
       playerChar: 'yinkesi',
-      enemies: [p.id],
+      enemies: [id],
       allies: [],
       diff: duelDiff(),
       aiAggr: (window.SJI_SAVE && SJI_SAVE.settings.aiAggr) || 'active',
     }, opts || {});
+    if (sp) {
+      Object.assign(cfg, { enemies: sp.enemies, allies: sp.allies || [], stage: sp.stage, title: sp.title });
+    } else if (first && window.SJI_SCENES) {
+      const sid = SCENE_OF_CHAR[id];
+      if (sid && SJI_SCENES.stages[sid]) {
+        cfg.stage = { id: sid };
+        cfg.introScene = SJI_SCENES.stages[sid].intro;
+      }
+    }
+    return cfg;
+  }
+
+  /* 刀禁期（高三·十二月起，师怒禁刀）：课上时段于教室楼内约战，可能被钦法连人带刀收缴 */
+  function knifeBanRiskOk(onDecide) {
+    if (G.ch < 12) { onDecide(); return; }
+    if (G.flags.duelBanDays > 0) { toast(`刀具尚在钦法处（还押 ${G.flags.duelBanDays} 日），约战不得`, '禁'); return; }
+    const per = Engine.period();
+    const safe = ['dorm', 'playground', 'gate', 'canteen'].includes(World.sceneId);
+    if ((per !== 'morning' && per !== 'aft') || safe || Math.random() > 0.25) { onDecide(); return; }
+    Dialog.play([
+      { who: '钦法', text: '（从走廊尽头逼近）此何课也？尔等围于此，所为何物？' },
+      { choice: [
+        { t: '把马刀塞进袖口，佯装晨读', fx: '五五之数', run() {
+            if (Math.random() < 0.55) return { say: { who: '旁白', text: '钦法扫了一眼，走了。刀柄上全是手汗。' } };
+            G.flags.duelBanDays = 2;
+            return { say: { who: '钦法', text: '此何物？马刀也。——缴矣。两日后还汝。' }, bad: true };
+        } },
+        { t: '称此乃历史教具，正在鉴古', fx: '六五之数', run() {
+            if (Math.random() < 0.65) return { say: { who: '旁白', text: '钦法端详片刻：「……善。」——好险，他没认出来。' } };
+            G.flags.fineTomorrow = true;
+            return { say: { who: '钦法', text: '教具？站到后面去。明日行动点-1。' }, bad: true };
+        } },
+        { t: '抱起书包就跑', fx: '险中求活', run() {
+            if (Math.random() < 0.8) { Engine.addRep(-2); return { say: { who: '旁白', text: '你一路冲进厕所，听见外面脚步声远去。' } }; }
+            Engine.addRep(-5); Engine.award('ach_caught');
+            G.flags.duelBanDays = 2;
+            return { say: { who: '钦法', text: '站住！人赃并获——刀缴两日，通报于电子班牌！' }, bad: true };
+        } },
+      ] },
+    ], () => {
+      Save.write();
+      if (G.flags.duelBanDays > 0) { afterAction(); return; }   // 刀被缴，这一战打不成了
+      onDecide();
+    });
   }
 
   function challenge(p) {
@@ -37,13 +104,14 @@ const Main = (() => {
       if (Math.hypot(pos[0] - px, pos[1] - py) > 80) { World.walkTo(pos[0], pos[1] - 50); return; }
     }
     if (!window.SJI_DATA.CHARACTERS[p.id]) { toast('此人不会马刀。', '刀'); return; }
+    if ((G.flags.duelBanDays || 0) > 0) { toast(`刀具尚在钦法处（还押 ${G.flags.duelBanDays} 日），约战不得`, '禁'); return; }
     const pool = (p.chat && p.chat.length) ? p.chat : ['来呀来呀。'];
     Dialog.play([
       { who: p.hao || p.name, text: pick(pool) },
       { who: '音克思', text: '闲话少叙——马刀场上见真章。来呀来呀！' },
       { who: p.hao || p.name, text: pick(['来呀来呀，重开重开。', '规则至简，而引人入胜。——请。', '活者为王。开刀吧。']) },
     ], () => {
-      SJI_UI.startBattle(duelCfg(p));
+      knifeBanRiskOk(() => SJI_UI.startBattle(duelCfg(p)));
     });
   }
 
@@ -203,7 +271,8 @@ const Main = (() => {
   function prologue() {
     enterPeriod(true);
     toast('点击地面移动 · 走近带「记」的名场面旁观', '引');
-    setTimeout(() => toast('右上「史记」随时翻阅卷目', '引'), 1800);
+    setTimeout(() => toast('走近会马刀的人，可「来呀来呀」约战——胜则录技入刀谱', '刀'), 1800);
+    setTimeout(() => toast('右上「史记」随时翻阅卷目 · 「刀」字随时查看刀谱', '引'), 3600);
   }
 
   /* ---------- 时段流转 ---------- */
@@ -515,6 +584,16 @@ const Main = (() => {
     const castIds = new Set();
     Object.keys(G.vols).forEach(no => VOL_BY_NO[no].cast.forEach(id => castIds.add(id)));
     const favAvg = castIds.size ? Math.round([...castIds].reduce((a, id) => a + Engine.favorOf(id), 0) / castIds.size) : 0;
+    // 马刀行结局变体
+    const wins = G.wins || 0, cards = (G.blades && G.blades.cards || []).length;
+    const rank = (window.Blades && Blades.rankName()) || '未入册';
+    let bladePara;
+    if (wins === 0) bladePara = '「全书几乎不提马刀。你站在刀场边上，把笔墨都留给了人。」';
+    else if (wins >= 30) bladePara = `「另外——你的刀谱录了 ${cards} 人之技，生平 ${wins} 胜，封『${rank}』。马刀之神与你，只差一个名分。」`;
+    else bladePara = `「另外——你放不下的还有那把马刀。刀谱录 ${cards} 人之技，生平 ${wins} 胜，位至『${rank}』。」`;
+    const bladeTail = wins > 0
+      ? '<p style="font-size:14px;line-height:1.9">「卷八有云：既毕业，无复有刀者，悲哉。但你把它一笔一笔写进了书里——写进书里的刀，就不会消。」</p>'
+      : '';
     UI.openPanel('一年后 · AI 读史', body => {
       const card = el('div', 'card');
       card.style.fontFamily = 'var(--font-ui)';
@@ -526,6 +605,7 @@ const Main = (() => {
         <p style="font-size:14px;line-height:1.9">「书中诸人的平均好感 ${favAvg}/100，你在班中的声望 ${G.rep}/100——${G.rep >= 60 ? '你写作时显然没有失去太多朋友，这很了不起。' : '史官从来不好当，你得罪了一些人，但你没有删掉一个字。'}</p>
         <p style="font-size:14px;line-height:1.9">「最打动我的是：${pick(['你记录他们时，从未居高临下。', '你把小事故写成了大历史，又把大历史写得像小事。', '书里没有反派，只有没来得及好好说话的少年。'])}。</p>
         <p style="font-size:14px;line-height:1.9">「通过一个人的文字，真的能看出一个人的大部分。」</p>
+        ${bladePara}${bladeTail}
         <div style="text-align:center;margin:18px 0 4px">
           <div style="font-family:var(--font-cl);font-size:30px;font-weight:900;color:var(--cinnabar)">${title}</div>
         </div>
@@ -555,6 +635,7 @@ const Main = (() => {
   /* ---------- 全局按钮 ---------- */
   function bindHUD() {
     $('#btn-hud-book').onclick = () => UI.panelBook();
+    $('#btn-hud-blade').onclick = () => panelBlades();
     $('#btn-bag').onclick = () => UI.panelBag();
     $('#btn-menu').onclick = () => menuPanel();
   }

@@ -41,6 +41,10 @@ const UI = (() => {
     $('#hud-wen-v').textContent = G.wen;
     $('#hud-rep-v').textContent = G.rep;
     $('#hud-money-v').textContent = G.money;
+    if ($('#hud-blade-name')) {
+      const rn = (window.Blades && Blades.rankName()) || '未入册';
+      $('#hud-blade-name').textContent = rn === '马刀之神' ? '马刀之神' : (rn + (G.wins ? ` · ${G.wins}胜` : ''));
+    }
     document.body.classList.remove('theme-morning', 'theme-day', 'theme-night');
     document.body.classList.add(PERIOD_THEME[Engine.period()]);
   }
@@ -89,14 +93,19 @@ const UI = (() => {
         const st = G.vols[v.no];
         const pool = Object.keys(SHARDS).filter(id => SHARDS[id].vol === v.no);
         const owned = pool.filter(s => G.shards[s]).length;
+        const duelOk = !v.duel || (typeof Blades !== 'undefined' && Blades.hasCard(v.duel));
         const row = el('div', 'vol-row' + (st ? '' : owned ? '' : ' locked'));
         const right = st ? `<span class="vol-grade g${st.grade}">${gradeName(st.grade)}</span>`
           : `<span class="muted">${owned}/${pool.length} 料</span>`;
+        const duelNote = (!st && v.duel && !duelOk)
+          ? `<small>未胜传主「${(window.SJI_DATA.CHARACTERS[v.duel] || {}).hao || v.duel}」——成传之战未打</small>`
+          : '';
         row.innerHTML = `<div class="vol-no">${v.i}</div>
-          <div class="vol-name">${v.title}<small>${st ? `${st.style === '直' ? '直笔' : '曲笔'} · 得意 ${st.shards.length} 条` : `集 ${pool.length} 料取其四 · 文笔≥${v.minWen}`}</small>
+          <div class="vol-name">${v.title}<small>${st ? `${st.style === '直' ? '直笔' : '曲笔'} · 得意 ${st.shards.length} 条` : `集 ${pool.length} 料取其四 · 文笔≥${v.minWen}`}</small>${duelNote}
           ${st ? '' : `<div class="progress-bar"><i style="width:${Math.round(owned / pool.length * 100)}%"></i></div>`}</div>${right}`;
         row.onclick = () => {
           if (st) viewVol(v.no);
+          else if (!duelOk) Writing.open(v.no);   // 借 Writing.open 的门禁 toast 提示去打传主
           else if (owned >= 4) Writing.open(v.no);
           else {
             const missing = v.pool.filter(s => !G.shards[s]);

@@ -18,7 +18,7 @@ function newGameState() {
     giftToday: {}, chatCount: 0, caughtToday: false,
     bag: { snack:1, candy:2, note:1 },
     ach: {},
-    flags: { visitedScenes:['library'], metPeople:[], prologue:false },
+    flags: { visitedScenes:['library'], metPeople:[], prologue:false, duelBanDays:0 },
     wins: 0, duelsLost: 0,
     blades: { cards: [], equip: null },   // 刀谱：击败者 id → 录技
     duelDone: {},            // duelId -> true（成传战/支线战斗去重）
@@ -64,6 +64,10 @@ const Engine = {
     G.day++; G.periodIdx = 0; G.ap = G.apMax + (G.flags.rested ? 1 : 0) - (G.flags.fineTomorrow ? 1 : 0);
     G.flags.rested = false;
     if (G.flags.fineTomorrow) { toast('昨日罚站，今日行动点 -1', '恶'); G.flags.fineTomorrow = false; }
+    if (G.flags.duelBanDays > 0) {
+      G.flags.duelBanDays--;
+      if (G.flags.duelBanDays === 0) toast('钦法还刀：马刀失而复得，可约战矣', '刀');
+    }
     G.giftToday = {}; G.chatCount = 0; G.caughtToday = false;
     G.money += 3; // 每日生活费
     if (G.day > this.chDef().days) { return 'chapter-end'; }
