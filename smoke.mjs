@@ -132,7 +132,7 @@ for (let i = 0; i < 10; i++) {
 const resultShown = await page.evaluate(() => !document.querySelector('#battle-result').classList.contains('hidden'));
 check('结算页出现', resultShown);
 check('判定为胜', await page.evaluate(() => window.SJI.battle.result === 'win'));
-const rewards = await page.evaluate(() => ({ wins: G.wins, card: Blades.hasCard('xinhui'), hpB: Blades.hpBonus() }));
+const rewards = await page.evaluate(() => ({ wins: G.wins, card: Blades.hasCard('xinhui') }));
 check('胜场入账', rewards.wins === 1, 'wins=' + rewards.wins);
 check('歆慧之技录入刀谱', rewards.card === true);
 await page.screenshot({ path: `${OUT}/m1-05-result.png` });
@@ -376,15 +376,8 @@ const blank = await page.evaluate(() => {
   return { old: old.length };
 });
 check('存档可读（白板逻辑在下方新档验证）', blank.old >= 0);
-// 9b. 修炼：给钱主体魄，验血上限与成就
-const buy = await page.evaluate(() => {
-  G.money = 50;
-  const before = Blades.hpBonus();
-  const ok = Blades.buyUpgrade('hp');
-  return { ok, before, after: Blades.hpBonus(), money: G.money, ach: !!G.ach.ach_upgrade, lv: G.upgrades.hp };
-});
-check('修炼「体魄」购买成功', buy.ok === true && buy.after === buy.before + 2, `hp加成 ${buy.before}→${buy.after}`);
-check('修炼成就与扣款', buy.ach === true && buy.money === 38, 'money=' + buy.money);
+// 9b. 白板基线：无数值养成，基础血 10（身怀大腹如斗除外）
+check('白板基础血 10', await page.evaluate(() => window.SJI_DATA.CHARACTERS.yinkesi.hp === 10 + Blades.innates().reduce((a, id) => a + (id === 'luhao' ? 10 : 0), 0)));
 // 9c. 高难试炼：解锁九省联考并首通
 const trialOpen = await page.evaluate(() => {
   while (G.ch < 9) Engine.nextChapter();

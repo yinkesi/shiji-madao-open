@@ -24,7 +24,6 @@ function newGameState() {
     flags: { visitedScenes:['playground'], metPeople:[], prologue:false, duelBanDays:0 },
     wins: 0, duelsLost: 0,
     blades: { cards: [], equip: null, rare: [] },   // 刀谱：击败者 id → 录技；rare → 试炼稀有刀卡
-    upgrades: {},            // 修炼等级：hp/knife/horse/dodge/regen/cd/ap
     quests: {},              // 任务完成记录（主线 9 节 + 支线 7 条）
     roster: ['yinkesi'],     // 出战名册（支线解锁强力人物）
     trialDone: {},           // 试炼首通记录
@@ -172,7 +171,6 @@ const ACHIEVEMENTS = [
   { id:'ach_wallwin', name:'不离城墙',  icon:'🧱', desc:'全程不离城墙取得一场胜利。（吾终将尽城墙）' },
   { id:'ach_champion',name:'协会冠军',  icon:'🏆', desc:'赢下世界马刀协会锦标赛三连胜。' },
   { id:'ach_surv10',  name:'苔藓不尽',  icon:'🌾', desc:'破败城墙生存抵达第 10 波。' },
-  { id:'ach_upgrade', name:'有备而来',  icon:'💪', desc:'第一次修炼成功。（买些道具提升自己）' },
   { id:'ach_trial',   name:'试炼者',    icon:'⛰', desc:'六场高难试炼全部首通。' },
   { id:'ach_quest',   name:'听令行事',  icon:'📜', desc:'完成第一个任务。' },
   { id:'ach_jntm',    name:'鸡你太美',  icon:'🏀', desc:'只因在榻上高歌，自扫舍七日。' },

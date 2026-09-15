@@ -8,7 +8,6 @@ const Main = (() => {
     if (G.duelsLost == null) G.duelsLost = 0;
     if (!G.blades) G.blades = { cards: [], equip: null, rare: [] };
     if (!G.blades.rare) G.blades.rare = [];
-    if (!G.upgrades) G.upgrades = {};
     if (!G.quests) G.quests = {};
     if (!G.roster || !G.roster.length) G.roster = ['yinkesi'];
     if (!G.trialDone) G.trialDone = {};
@@ -303,32 +302,13 @@ const Main = (() => {
     Blades.registerChar();
     UI.openPanel('刀谱 · 马刀行', body => {
       const w = G.wins || 0;
-      const next = Blades.nextRank();
       const eqId = Blades.equippedSkillId();
       const eqSk = eqId ? Blades.skillCardOf(eqId) : null;
       body.appendChild(el('div', 'card', `
-        <h3>段位：${Blades.rankName()} <span class="pill gold">胜 ${w} 场</span>${G.duelsLost ? `<span class="pill gray">败 ${G.duelsLost}</span>` : ''}</h3>
-        <div class="meta">段位加成：血上限 +${Blades.hpBonus()} · 每回合行动点 +${Blades.apBonus()}
-        ${next ? `　·　再胜 ${next.w - w} 场晋「${next.name}」` : '　·　已至刀道之巅'}</div>
+        <h3>称号：${Blades.rankName()} <span class="pill gold">胜 ${w} 场</span>${G.duelsLost ? `<span class="pill gray">败 ${G.duelsLost}</span>` : ''}</h3>
+        <div class="meta">称号仅表战绩，无数值加成——成长全凭刀谱之技与身怀之技。</div>
         <div style="height:8px"></div>
         <div class="meta">当前技：${eqSk ? `「${eqSk.name}」——${eqSk.desc}` : '<b style="color:var(--cinnabar)">白板无技</b>——赢下第一场对决，录他一技。'}</div>`));
-      /* 修炼：零花钱买永久强化 */
-      body.appendChild(el('div', 'muted', '<div style="height:12px"></div>修炼 · 花零花钱买永久强化（小卖部挣钱，对决与试炼亦有进益）：'));
-      Blades.UPGRADES.forEach(u => {
-        const lv = Blades.upgrades()[u.id] || 0;
-        const maxed = lv >= u.max;
-        const cost = u.price(lv);
-        const c = el('div', 'card');
-        c.style.cssText = 'display:flex;align-items:center;gap:12px';
-        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${u.name} <span class="pill gray">Lv.${lv}/${u.max}</span></h3>
-          <div class="meta">${u.desc}${maxed ? ' · 已臻化境' : ` · 花费 ◉${cost}`}</div></div>`;
-        const b = el('button', 'btn' + (maxed ? '' : ' btn-primary'), maxed ? '已成' : '修炼');
-        b.style.padding = '8px 14px';
-        if (maxed) b.disabled = true;
-        else b.onclick = () => { if (Blades.buyUpgrade(u.id)) { UI.closePanel(); panelBlades(); } };
-        c.appendChild(b);
-        body.appendChild(c);
-      });
       /* 身怀之技（支线永久继承的被动，可叠加、无需装备） */
       const inn = Blades.innates();
       if (inn.length) {

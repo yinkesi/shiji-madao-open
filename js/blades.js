@@ -1,6 +1,6 @@
 /* 实验史记·马刀行 —— 刀谱：音克思的战斗成长系统
-   击败马刀手 → 其技录入刀谱（可装备为技能）；声望段位随胜场提升（血上限/行动点加成）。
-   战斗卡牌数据直接取自 SJI_DATA.CHARACTERS 的技能定义，引擎侧由 _execLearned 数据驱动执行。 */
+   白板基础（血 10、无技、无数值养成）→ 击败录技（主动+被动）→ 支线身怀之技 → 稀有刀卡单携带。
+   段位仅为称号。战斗卡牌数据取自 SJI_DATA.CHARACTERS，引擎侧由 _execLearned/hasPassive 数据驱动执行。 */
 'use strict';
 
 const BLADE_RANKS = [
@@ -30,18 +30,6 @@ const BATTLE_ITEMS = {
   spin:      { boon: 'b_horse', label: '马踢伤害 +1' },
 };
 
-/* 修炼：零花钱买的永久强化（刀谱面板购买，映射到既有增益体系） */
-const UPGRADES = [
-  { id: 'hp',    name: '体魄', desc: '血上限 +2', max: 3, price: lv => 12 + lv * 8 },
-  { id: 'knife', name: '刀锋', desc: '刀击伤害 +1', max: 1, price: () => 25 },
-  { id: 'horse', name: '马政', desc: '马踢伤害 +1', max: 1, price: () => 25 },
-  { id: 'dodge', name: '轻功', desc: '闪避 +15%', max: 1, price: () => 20 },
-  { id: 'regen', name: '吐纳', desc: '每回合回复 1 血', max: 1, price: () => 30 },
-  { id: 'cd',    name: '算学', desc: '技能冷却 -1', max: 1, price: () => 30 },
-  { id: 'ap',    name: '气力', desc: '每回合行动点 +1', max: 1, price: () => 45 },
-];
-const UPGRADE_BOON = { knife: 'b_knife', horse: 'b_horse', dodge: 'b_dodge', regen: 'b_regen', cd: 'b_cd', ap: 'b_ap' };
-
 /* 身怀之技：支线完成永久继承的角色被动（可多张叠加、无需装备；hp 为额外生命上限）。
    机制侧由引擎 hasPassive(u, charId) 判定（_innates 注入），血量侧由 applyBoons 注入。 */
 const INNATE_INFO = {
@@ -68,7 +56,7 @@ const RARE_BOONS = {
   b_killheal:    { name: '庆功之宴', desc: '击破敌人回复 4 血，原为 2。（大胜而归，理当加餐）' },
   b_shield:      { name: '班主任的偏爱', desc: '每场开局获得 3 点护盾。（含笑素善大哥，此之谓也）' },
   b_firststrike: { name: '先手刀', desc: '每回合首次刀击伤害 +1。（唯快不破）' },
-  b_horse:       { name: '马踏连营', desc: '马踢伤害 +1（与修炼「马政」可叠加）。（一连踏营，声势浩大）' },
+  b_horse:       { name: '马踏连营', desc: '马踢伤害 +1。（一连踏营，声势浩大）' },
 };
 
 const Blades = (() => {
@@ -88,11 +76,6 @@ const Blades = (() => {
   function rankName() { return rankOf(wins()).name; }
   function nextRank() { return BLADE_RANKS.find(t => t.w > wins()) || null; }
 
-  function upgrades() {
-    if (!window.G) return {};
-    G.upgrades = G.upgrades || {};
-    return G.upgrades;
-  }
   function rareList() {
     if (!window.G) return [];
     if (!G.blades) G.blades = { cards: [], equip: null };
@@ -119,26 +102,7 @@ const Blades = (() => {
     return false;
   }
 
-  /* 段位 → 战斗加成（白板基础血 10，靠段位/修炼长上去） */
-  function hpBonus() { return Math.min(4, Math.floor(wins() / 8)) + (upgrades().hp || 0) * 2; }
-  function apBonus() { return Math.min(3, Math.floor(wins() / 15)) + (upgrades().ap || 0); }
-
-  function buyUpgrade(id) {
-    const def = UPGRADES.find(u => u.id === id);
-    if (!def) return false;
-    const lv = upgrades()[id] || 0;
-    if (lv >= def.max) return false;
-    const cost = def.price(lv);
-    if (G.money < cost) { toast(`零花钱不够（需 ◉${cost}）`, '恶'); return false; }
-    Engine.addMoney(-cost);
-    upgrades()[id] = lv + 1;
-    if (window.SJI_DATA) registerChar();
-    Save.write();
-    toast(`修炼有成：「${def.name}」${def.desc}`, '炼');
-    Engine.award('ach_upgrade');
-    return true;
-  }
-
+  /* 段位仅为称号（无数值加成）——养成只走刀谱卡与身怀之技 */
   function grantRare(boonId) {
     const def = RARE_BOONS[boonId];
     if (!def) return false;
@@ -235,22 +199,18 @@ const Blades = (() => {
     return true;
   }
 
-  /* 构建音克思战斗卡并注册进 SJI_DATA（白板起步：无技、段位与修炼随成长实时变化） */
+  /* 构建音克思战斗卡并注册进 SJI_DATA（纯白板基础血 10；成长只来自刀谱卡与身怀之技） */
   function registerChar() {
     const eqId = equippedSkillId();
     const sk = eqId ? skillCardOf(eqId) : null;
-    const up = upgrades();
-    const upDesc = Object.keys(UPGRADE_BOON)
-      .filter(k => up[k]).map(k => UPGRADES.find(u => u.id === k).name).join('、');
     const innateHp = innates().reduce((a, id) => a + ((INNATE_INFO[id] && INNATE_INFO[id].hp) || 0), 0);
     window.SJI_DATA.CHARACTERS.yinkesi = {
       id: 'yinkesi', name: '音克思', hao: '史官 · ' + rankName(), juan: '各卷',
       glyph: '史', color: '#a63a2b',
-      hp: 10 + hpBonus() + innateHp,
+      hp: 10 + innateHp,
       passive: {
         name: eqId ? '刀谱 · ' + rankName() : '白板 · ' + rankName(),
-        desc: `胜${wins()}场：血上限+${hpBonus()}，每回合行动点+${apBonus()}。`
-          + (upDesc ? `修炼：${upDesc}。` : '')
+        desc: `称号「${rankName()}」（胜${wins()}场，纯荣誉）。`
           + (eqId ? `技与被动承「${window.SJI_DATA.CHARACTERS[eqId].hao}」——其被动机制对汝生效。`
                  : '白板无技——去赢一场，录他一技（连被动一并承之）。')
           + (innates().length ? ` 身怀：${innates().map(id => INNATE_INFO[id] ? '「' + INNATE_INFO[id].name + '」' : '').join('')}（常驻）。` : ''),
@@ -263,7 +223,7 @@ const Blades = (() => {
     return window.SJI_DATA.CHARACTERS.yinkesi;
   }
 
-  /* 开战前注入加成：音克思享段位+修炼，全名册共享稀有刀卡与道具 */
+  /* 开战前注入加成：音克思享刀谱被动与身怀之技，全名册共享稀有刀卡与道具 */
   function applyBoons(battle) {
     const asLead = !battle.player.charId || battle.player.charId === 'yinkesi';
     if (asLead) {
@@ -272,11 +232,6 @@ const Blades = (() => {
       /* 身怀之技（支线永久继承的被动）：注入多来源集合 */
       battle.player._innates = innates().slice();
       if (innates().length) battle.pushLog("身怀之技：" + innates().map(id => INNATE_INFO[id] ? INNATE_INFO[id].name : '').filter(Boolean).join('、') + "。");
-      const n = apBonus();
-      for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
-      for (const id of Object.keys(UPGRADE_BOON)) {
-        if ((upgrades()[id] || 0) > 0) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === UPGRADE_BOON[id]));
-      }
     }
     /* 稀有刀卡：每场只能携带一张（左上角可切换） */
     const carried = selectedRare();
@@ -294,10 +249,10 @@ const Blades = (() => {
   }
 
   return { registerChar, grant, equip, cards, hasCard, skillCardOf, equippedSkillId,
-           rankName, nextRank, hpBonus, apBonus, applyBoons, buyUpgrade, grantRare,
+           rankName, applyBoons, grantRare,
            innates, grantInnate, INNATE_INFO,
            selectedRare, switchRare,
-           upgrades, rareList, UPGRADES, RARE_BOONS, BATTLE_ITEMS, BLADE_RANKS };
+           rareList, RARE_BOONS, BATTLE_ITEMS, BLADE_RANKS };
 })();
 
 /* 载入即注册音克思战斗卡（G 未建时按 0 胜计；开战时 Blades.registerChar 会按最新胜场重算） */

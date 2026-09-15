@@ -28,40 +28,40 @@ const MAIN = window.Quests.mainList().map(q => ({
 }));
 
 /* 玩家档位：到该节时大致具备的加成（血上限额外 / 额外行动点 / 已持稀有卡 / 已录之技） */
+/* 养成已砍：无段位/修炼数值，成长=刀谱技能+身怀之技被动+单张稀有卡 */
 const PROFILES = {
-  m1: { hpBonus: 0, ap: 0, rares: [], skill: null },
-  m2: { hpBonus: 0, ap: 0, rares: [], skill: null },
-  m3: { hpBonus: 0, ap: 0, rares: [], skill: 'xinhui' },
-  m4: { hpBonus: 1, ap: 0, rares: [], skill: 'xinhui' },
-  m5: { hpBonus: 1, ap: 1, rares: ['b_killheal'], skill: 'xinhui' },
-  m6: { hpBonus: 2, ap: 1, rares: ['b_killheal'], skill: 'xinhui' },
-  m7: { hpBonus: 2, ap: 1, rares: ['b_killheal', 'b_firststrike'], skill: 'wonder' },
-  m8: { hpBonus: 3, ap: 1, rares: ['b_killheal', 'b_firststrike'], skill: 'wonder' },
-  m9: { hpBonus: 3, ap: 1, rares: ['b_killheal', 'b_firststrike', 'b_bloodfree'], skill: 'wonder' },
+  m1: { rares: [], skill: null, innates: [] },
+  m2: { rares: [], skill: null, innates: [] },
+  m3: { rares: [], skill: 'xinhui', innates: [] },
+  m4: { rares: [], skill: 'xinhui', innates: ['luhao'] },
+  m5: { rares: ['b_killheal'], skill: 'xinhui', innates: ['luhao', 'touge'] },
+  m6: { rares: ['b_killheal'], skill: 'xinhui', innates: ['luhao', 'touge'] },
+  m7: { rares: ['b_firststrike'], skill: 'wonder', innates: ['luhao', 'touge', 'shenren'] },
+  m8: { rares: ['b_firststrike'], skill: 'wonder', innates: ['luhao', 'touge', 'shenren'] },
+  m9: { rares: ['b_bloodfree'], skill: 'wonder', innates: ['luhao', 'touge', 'shenren'] },
 };
 
-/* 登记音克思的测试卡（与 Blades.registerChar 的产物同构） */
+/* 登记音克思的测试卡（与 Blades.registerChar 的产物同构：血 10 + 身怀血量） */
 function registerYinkesi(prof) {
   const src = prof.skill ? D.CHARACTERS[prof.skill] : null;
   const sk = src ? Object.assign({}, src.skills ? src.skills[0] : src.skill) : null;
+  const innateHp = (prof.innates || []).reduce((a, id) => a + (id === 'luhao' ? 10 : 0), 0);
   D.CHARACTERS.yinkesi = {
     id: 'yinkesi', name: '音克思', hao: '史官', juan: '各卷', glyph: '史', color: '#a63a2b',
-    hp: 10 + prof.hpBonus,
+    hp: 10 + innateHp,
     passive: { name: '刀谱', desc: '测试档位' },
     skill: sk, quote: '', bio: '', playable: true, aggr: 0.7,
   };
 }
 
-function applyRares(b, rares, ap) {
-  for (let i = 0; i < ap; i++) {
-    const boon = D.BOONS.find(x => x.id === 'b_ap');
-    if (boon) b._applyBoon(b.player, boon);
-  }
+function applyRares(b, rares, prof) {
   /* 稀有刀卡每场只能携带一张：模型只带档案中的第一张 */
   rares.slice(0, 1).forEach(id => {
     const boon = D.BOONS.find(x => x.id === id);
     if (boon) b._applyBoon(b.player, boon);
   });
+  /* 身怀之技：被动多来源（引擎 hasPassive 读取 _innates） */
+  b.player._innates = (prof.innates || []).slice();
 }
 
 /* 随机猜拳，与 winrate4.mjs 同分布 */
@@ -94,7 +94,7 @@ for (const q of MAIN) {
       }
       let b;
       try { b = new E.Battle(cfg); } catch (e) { row.rates[diff] = 'ERR ' + e.message; continue; }
-      applyRares(b, prof.rares, prof.ap);
+      applyRares(b, prof.rares, prof);
       ui.rpsRound = randRps();
       try { await b.run(); } catch (e) { row.rates[diff] = 'ERR'; continue; }
       if (b.result === 'win') wins++;
