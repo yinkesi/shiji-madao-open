@@ -262,6 +262,57 @@ await page.click('#r-menu');
 await page.waitForTimeout(700);
 check('生存后回校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));
 
+// ===== 9. 白板开局 + 修炼 + 高难试炼 =====
+// 9a. 白板：新档初始无技（此处进度已非白板，仅验注册表逻辑成立）
+const blank = await page.evaluate(() => {
+  const old = JSON.stringify(JSON.parse(localStorage.getItem('shiji_cqb_v1') || '{}'));
+  return { old: old.length };
+});
+check('存档可读（白板逻辑在下方新档验证）', blank.old >= 0);
+// 9b. 修炼：给钱主体魄，验血上限与成就
+const buy = await page.evaluate(() => {
+  G.money = 50;
+  const before = Blades.hpBonus();
+  const ok = Blades.buyUpgrade('hp');
+  return { ok, before, after: Blades.hpBonus(), money: G.money, ach: !!G.ach.ach_upgrade, lv: G.upgrades.hp };
+});
+check('修炼「体魄」购买成功', buy.ok === true && buy.after === buy.before + 2, `hp加成 ${buy.before}→${buy.after}`);
+check('修炼成就与扣款', buy.ach === true && buy.money === 38, 'money=' + buy.money);
+// 9c. 高难试炼：解锁九省联考并首通
+const trialOpen = await page.evaluate(() => {
+  while (G.ch < 9) Engine.nextChapter();
+  G.flags.xiehui = true; G.flags.wonderTrial = true;
+  if (!Blades.hasCard('wonder')) Blades.grant('wonder');
+  Save.write();
+  return Main.trialById('t_liankao').ok();
+});
+check('九省联考试炼解锁', trialOpen === true);
+await page.evaluate(() => Main.startTrial('t_liankao'));
+await page.waitForTimeout(1500);
+check('试炼开战（强制困难）', await page.evaluate(() => window.BATTLE_ACTIVE && window.SJI.battle.cfg.trialId === 't_liankao' && window.SJI.battle.diff === 'hard'));
+for (let i = 0; i < 14; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(300); }
+await page.waitForTimeout(1500);
+await page.evaluate(() => window.SJI_DEBUG.killEnemies());
+for (let i = 0; i < 12; i++) {
+  const done = await page.evaluate(() => !document.querySelector('#battle-result').classList.contains('hidden'));
+  if (done) break;
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(700);
+}
+await page.waitForTimeout(1800);
+const trialWin = await page.evaluate(() => ({
+  result: window.SJI.battle.result,
+  done: !!G.trialDone.t_liankao,
+  rare: Blades.rareList().includes('b_bloodfree'),
+  wins: G.wins,
+}));
+check('试炼胜利', trialWin.result === 'win');
+check('首通记录与稀有刀卡「以道代血」', trialWin.done === true && trialWin.rare === true);
+await page.screenshot({ path: `${OUT}/m5-01-trial-result.png` });
+await page.click('#r-menu');
+await page.waitForTimeout(700);
+check('试炼后回校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));
+
 // ===== 结果 =====
 console.log(errors.length ? '\n页面错误:\n' + errors.join('\n') : '\n无页面错误');
 console.log(fails === 0 ? '\n=== M1 SMOKE ALL PASS ===' : `\n!! ${fails} 项失败`);

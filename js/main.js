@@ -6,7 +6,10 @@ const Main = (() => {
   function normalizeG() {
     if (G.wins == null) G.wins = 0;
     if (G.duelsLost == null) G.duelsLost = 0;
-    if (!G.blades) G.blades = { cards: [], equip: null };
+    if (!G.blades) G.blades = { cards: [], equip: null, rare: [] };
+    if (!G.blades.rare) G.blades.rare = [];
+    if (!G.upgrades) G.upgrades = {};
+    if (!G.trialDone) G.trialDone = {};
     if (!G.duelDone) G.duelDone = {};
     if (!G.flags) G.flags = {};
     if (G.flags.duelBanDays == null) G.flags.duelBanDays = 0;
@@ -165,6 +168,17 @@ const Main = (() => {
         if (G.wins >= 30) Engine.award('ach_duel30');
         if (b.stats.usedBlood) Engine.award('ach_bloodwin');
         if (!b.stats.everLeftWall) Engine.award('ach_wallwin');
+        /* 高难试炼首通：追加稀有刀卡 */
+        if (b.cfg.trialId && !G.trialDone[b.cfg.trialId]) {
+          const t = trialById(b.cfg.trialId);
+          G.trialDone[t.id] = true;
+          Blades.grantRare(t.reward);
+          Engine.addRep(3); Engine.addMoney(30);
+          if (TRIALS.every(x => G.trialDone[x.id])) Engine.award('ach_trial');
+          const rw = Blades.RARE_BOONS[t.reward];
+          extra += `<div><b>试炼首通！</b>「${t.name}」授稀有刀卡「${rw.name}」：${rw.desc}（每场常驻生效）</div>
+            <div>另声望 +3 · 零花钱 +30。</div>`;
+        }
         if (b.cfg.tournament) {
           ['luhao', 'xiaochuan', 'zichen'].forEach(id => Blades.grant(id));
           Engine.addRep(4); Engine.addMoney(10);
@@ -206,13 +220,40 @@ const Main = (() => {
       const w = G.wins || 0;
       const next = Blades.nextRank();
       const eqId = Blades.equippedSkillId();
-      const eqSk = eqId ? Blades.skillCardOf(eqId) : Blades.defaultSkill();
+      const eqSk = eqId ? Blades.skillCardOf(eqId) : null;
       body.appendChild(el('div', 'card', `
         <h3>段位：${Blades.rankName()} <span class="pill gold">胜 ${w} 场</span>${G.duelsLost ? `<span class="pill gray">败 ${G.duelsLost}</span>` : ''}</h3>
         <div class="meta">段位加成：血上限 +${Blades.hpBonus()} · 每回合行动点 +${Blades.apBonus()}
         ${next ? `　·　再胜 ${next.w - w} 场晋「${next.name}」` : '　·　已至刀道之巅'}</div>
         <div style="height:8px"></div>
-        <div class="meta">当前技：「${eqSk.name}」——${eqSk.desc}</div>`));
+        <div class="meta">当前技：${eqSk ? `「${eqSk.name}」——${eqSk.desc}` : '<b style="color:var(--cinnabar)">白板无技</b>——赢下第一场对决，录他一技。'}</div>`));
+      /* 修炼：零花钱买永久强化 */
+      body.appendChild(el('div', 'muted', '<div style="height:12px"></div>修炼 · 花零花钱买永久强化（小卖部挣钱，对决与试炼亦有进益）：'));
+      Blades.UPGRADES.forEach(u => {
+        const lv = Blades.upgrades()[u.id] || 0;
+        const maxed = lv >= u.max;
+        const cost = u.price(lv);
+        const c = el('div', 'card');
+        c.style.cssText = 'display:flex;align-items:center;gap:12px';
+        c.innerHTML = `<div style="flex:1"><h3 style="margin:0">${u.name} <span class="pill gray">Lv.${lv}/${u.max}</span></h3>
+          <div class="meta">${u.desc}${maxed ? ' · 已臻化境' : ` · 花费 ◉${cost}`}</div></div>`;
+        const b = el('button', 'btn' + (maxed ? '' : ' btn-primary'), maxed ? '已成' : '修炼');
+        b.style.padding = '8px 14px';
+        if (maxed) b.disabled = true;
+        else b.onclick = () => { if (Blades.buyUpgrade(u.id)) { UI.closePanel(); panelBlades(); } };
+        c.appendChild(b);
+        body.appendChild(c);
+      });
+      /* 稀有刀卡（试炼首通所授） */
+      const rares = Blades.rareList();
+      if (rares.length) {
+        body.appendChild(el('div', 'muted', '<div style="height:12px"></div>稀有刀卡 · 高难试炼首通所授，每场常驻：'));
+        rares.forEach(bid => {
+          const rw = Blades.RARE_BOONS[bid];
+          if (rw) body.appendChild(el('div', 'card', `<h3 style="margin:0">「${rw.name}」<span class="pill">常驻</span></h3><div class="meta">${rw.desc}</div>`));
+        });
+      }
+      /* 录技列表 */
       body.appendChild(el('div', 'muted', '<div style="height:12px"></div>击败马刀手，其技自动录入刀谱。点选可切换出战之技：'));
       const cards = Blades.cards();
       if (!cards.length) {
@@ -436,6 +477,10 @@ const Main = (() => {
       if (!clubOn) t.disabled = true;
       else t.onclick = () => { if (!Engine.spendAP(1)) return; startTournament(); };
       bar.appendChild(t);
+      const tr = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '高难试炼' : '试炼未开');
+      if (!clubOn) tr.disabled = true;
+      else tr.onclick = () => panelTrial();
+      bar.appendChild(tr);
       const s = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '破败城墙 · 生存 ⚡' : '生存未开');
       if (!clubOn) s.disabled = true;
       else s.onclick = () => { if (!Engine.spendAP(1)) return; startSurvival(); };
@@ -474,6 +519,80 @@ const Main = (() => {
     SJI_UI.startBattle({
       mode: 'survival', title: '破败城墙 · 生存', playerChar: 'yinkesi',
       diff: duelDiff(), aiAggr: 'active',
+    });
+  }
+
+  /* ---------- 高难试炼：随剧情渐次解锁，首通授稀有刀卡 ---------- */
+  const TRIALS = [
+    { id: 't_yundonghui', name: '运动会 · 不怒自威', stars: 2,
+      cond: '卷三后，且已胜绍铭', ok: () => G.ch >= 3 && Blades.hasCard('shaoming'),
+      desc: '级部榜上前茅的绍铭：血厚一层，半血之下刀刀致命。',
+      cfg: { enemies: ['shaoming'], stage: { id: 's3b', hpScale: 1.3, blocked: [[1, 2], [1, 4], [5, 2], [5, 4]], terrain: 'cabinet' } },
+      reward: 'b_firststrike' },
+    { id: 't_sushe', name: '宿舍之夜 · 双臭临门', stars: 2,
+      cond: '卷七后，且已胜头哥', ok: () => G.ch >= 7 && Blades.hasCard('touge'),
+      desc: '头哥与神人同宿舍：溴味与臭袜齐飞，汝被锁在中间。',
+      cfg: { enemies: ['touge', 'shenren'], stage: { id: 's7b' } },
+      reward: 'b_shield' },
+    { id: 't_liankao', name: '九省联考 · 牛刀小试', stars: 3,
+      cond: '卷九后，已胜 wonder，且见证过「马刀神的试炼」', ok: () => G.ch >= 9 && Blades.hasCard('wonder') && G.flags.wonderTrial,
+      desc: 'wonder 以牛顿定理破第十八题——你就是那道题。血厚五成，强制困难。',
+      cfg: { enemies: ['wonder'], diff: 'hard', stage: { id: 's5b', hpScale: 1.5, blocked: [[3, 1], [3, 5]], terrain: 'table' } },
+      reward: 'b_bloodfree' },
+    { id: 't_jinbi', name: '禁闭室 · 疯法同囚', stars: 3,
+      cond: '卷十二后，且已胜李帆', ok: () => G.ch >= 12 && Blades.hasCard('lifan'),
+      desc: '禁闭室狭小，李疯购刀免动，主任当场抓获——同囚即死斗。',
+      cfg: { enemies: ['lifan', 'qinfa'], stage: { id: 's12b', blocked: [[3, 3]], terrain: 'cabinet' } },
+      reward: 'b_killheal' },
+    { id: 't_xunzheng', name: '二楼巡征 · 羚羊', stars: 3,
+      cond: '卷十三后，且已胜李默', ok: () => G.ch >= 13 && Blades.hasCard('limo'),
+      desc: '巡征的李默步幅极大、争食自愈，且已磨刀霍霍（血厚四成）。',
+      cfg: { enemies: ['limo'], stage: { id: 's13b', hpScale: 1.4 } },
+      reward: 'b_cleave' },
+    { id: 't_zhongyan', name: '终焉 · 本纪重演', stars: 4,
+      cond: '已在成传之战胜过校长', ok: () => Blades.hasCard('chongguo'),
+      desc: '再入校长室：崇国弃车保帅、种树不绝，钦法环伺——强制困难。',
+      cfg: { enemies: ['qinfa', 'chongguo'], allies: ['weibing'], diff: 'hard', stage: { id: 's14', blocked: [[2, 3], [4, 3]], terrain: 'cabinet' } },
+      reward: 'b_horsereach' },
+  ];
+
+  function trialById(id) { return TRIALS.find(t => t.id === id); }
+
+  function startTrial(id) {
+    const t = trialById(id);
+    if (!t) return;
+    if (!t.ok()) { toast('试炼未开：' + t.cond, '禁'); return; }
+    Blades.registerChar();
+    SJI_UI.startBattle(Object.assign({
+      mode: 'story', trialId: id,
+      title: '高难试炼 · ' + t.name, playerChar: 'yinkesi',
+      allies: [], diff: duelDiff(), aiAggr: 'active',
+    }, t.cfg, t.cfg.diff ? { diff: t.cfg.diff } : {}));
+  }
+
+  function panelTrial() {
+    Blades.registerChar();
+    UI.openPanel('协会试炼 · 高难关卡', body => {
+      const cleared = TRIALS.filter(t => G.trialDone[t.id]).length;
+      body.appendChild(el('div', 'card', `
+        <h3>据卷八《马刀书》：马刀之消，似于高中之时光也</h3>
+        <div class="meta">试炼随剧情渐次解锁。首通授「稀有刀卡」一场常驻；再打无赏，纯为切磋。已首通 ${cleared}/${TRIALS.length}。</div>`));
+      TRIALS.forEach(t => {
+        const done = !!G.trialDone[t.id];
+        const open = t.ok();
+        const rw = Blades.RARE_BOONS[t.reward];
+        const c = el('div', 'card');
+        c.style.cssText = 'display:flex;align-items:center;gap:12px;opacity:' + (open ? 1 : 0.55);
+        c.innerHTML = `<div style="flex:1;min-width:0"><h3 style="margin:0">${t.name} <span class="pill gold">${'★'.repeat(t.stars)}</span>${done ? '<span class="pill jade">已首通</span>' : open ? '<span class="pill">可挑战</span>' : '<span class="pill gray">未解锁</span>'}</h3>
+          <div class="meta">${t.desc}</div>
+          <div class="meta">解锁：${t.cond}　·　首通赏：稀有刀卡「${rw.name}」——${rw.desc}</div></div>`;
+        const b = el('button', 'btn' + (open ? ' btn-primary' : ''), done ? '再战' : open ? '挑战' : '未解锁');
+        b.style.padding = '8px 14px';
+        if (!open) b.disabled = true;
+        else b.onclick = () => { UI.closePanel(); startTrial(t.id); };
+        c.appendChild(b);
+        body.appendChild(c);
+      });
     });
   }
 
@@ -735,7 +854,7 @@ const Main = (() => {
 
   return { boot, onNPC, onEvent, afterDialog, updateCtx, onCtxChange,
            challenge, startDuel: p => SJI_UI.startBattle(duelCfg(p)), panelBlades, normalizeG,
-           startTournament, startSurvival };
+           startTournament, startSurvival, startTrial, panelTrial, trialById };
 })();
 
 window.addEventListener('DOMContentLoaded', () => Main.boot());
