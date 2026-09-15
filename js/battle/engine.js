@@ -104,10 +104,13 @@ window.SJI_ENGINE = (function () {
         enemies.forEach(u => { if (!u.ch.boss) { u.maxhp = Math.max(4, Math.round(u.maxhp * mult)); u.hp = u.maxhp; } });
       } else {
         // 剧情/生存：敌方血池随人数递减，避免一对多时输出不敷
+        // （极难/噩梦：多人平衡失效——敌人不减少血量；节点专属 hpScale 仍生效）
         const stg = (this.cfg && this.cfg.stage) ? this.cfg.stage : null;
         let k = (stg && stg.hpScale !== undefined) ? stg.hpScale
+          : (this.diff === "extreme" || this.diff === "nightmare") ? 1.0
           : CFG.HP_BY_COUNT[Math.min(4, enemies.length)];
         if (this.diff === "extreme") k *= CFG.DIFFICULTY.extreme.hpExtra;   // 极难：敌方更耐打
+        if (this.diff === "nightmare") k *= CFG.DIFFICULTY.nightmare.hpExtra;   // 噩梦：敌方更耐打
         if (k !== 1) enemies.forEach(u => { u.maxhp = Math.max(4, Math.round(u.maxhp * k)); u.hp = u.maxhp; });
       }
 
@@ -1073,7 +1076,8 @@ window.SJI_ENGINE = (function () {
       let ap = base + (u.boons.apBonus || 0);
       ap += u.st.apMod || 0; u.st.apMod = 0;
       // 以寡敌众：每多一名敌人，玩家多得一点行动（至多+3），使一对多仍有输出
-      if (u.side === "player") {
+      // （极难/噩梦：多人平衡失效——无行动点与血上限补偿）
+      if (u.side === "player" && this.diff !== "extreme" && this.diff !== "nightmare") {
         const n = this.living("enemy").length;
         if (n > 1) {
           const O = CFG.RULES.OUTNUMBER;
@@ -1400,6 +1404,7 @@ window.SJI_ENGINE = (function () {
         const ids = this.waves[this.waveIndex] || [];
         const stg2 = (this.cfg && this.cfg.stage) ? this.cfg.stage : null;
         const k = (stg2 && stg2.hpScale !== undefined) ? stg2.hpScale
+          : (this.diff === "extreme" || this.diff === "nightmare") ? 1.0
           : CFG.HP_BY_COUNT[Math.min(4, ids.length)];
         ids.forEach((id, i) => {
           const m = makeUnit(id, "enemy", 300 + this.waveIndex * 10 + i);
