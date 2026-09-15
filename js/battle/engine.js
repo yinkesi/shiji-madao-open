@@ -412,7 +412,7 @@ window.SJI_ENGINE = (function () {
 
     async doKnife(u, t) {
       if (!u.hasKnife || u.apNow <= 0 || !t || !t.alive) return false;
-      if (u.st.seal > 0) {
+      if (u.st.seal > 0 || u.st.disarm > 0) {
         if (u.side === "player") this.pushLog("「" + u.ch.hao + "」之刀被缴，此回合不能击。");
         return false;
       }
@@ -973,7 +973,7 @@ window.SJI_ENGINE = (function () {
           await this.doSacrifice(u); await sleep(300); continue;
         }
         // 刀击
-        if (u.hasKnife && u.st.seal <= 0 && adj(u, target)) {
+        if (u.hasKnife && u.st.seal <= 0 && u.st.disarm <= 0 && adj(u, target)) {
           await this.doKnife(u, target); await sleep(300); continue;
         }
         // 空地驱赶（互补于马踢）
@@ -1270,6 +1270,7 @@ window.SJI_ENGINE = (function () {
     /* 回合结束：缴械与沉默恰好覆盖"受害者自己的这一个回合"，到此解除 */
     _tickStatusEnd(u) {
       if (u.st.seal > 0) u.st.seal--;
+      if (u.st.disarm > 0) u.st.disarm--;
       if (u.st.silence > 0) u.st.silence--;
     }
 

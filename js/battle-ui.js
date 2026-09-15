@@ -164,6 +164,11 @@ window.SJI_UI = (function () {
     $("#b-attack").disabled = phaseLocked() || !p.hasKnife || p.apNow <= 0 || p.st.seal > 0 || !battle.opponentsOf(p).some(f => E.adj(p, f));
     $("#b-horseatk").disabled = phaseLocked() || !p.hasHorse || p.apNow <= 0 || !E.isWall(p.r, p.c) || (battle.rule && battle.rule.id === "suomen") || !battle.opponentsOf(p).some(f => E.isWall(f.r, f.c) && E.manh(p, f) <= 3);
     $("#b-drive").disabled = phaseLocked() || !p.hasHorse || p.apNow <= 0 || E.isWall(p.r, p.c) || (battle.rule && battle.rule.id === "suomen") || !battle.opponentsOf(p).some(f => E.adj(p, f) && !E.isWall(f.r, f.c));
+    // 禁用原因提示（tooltip）：让玩家知道「为什么用不了」
+    const seized = p.st.seal > 0 || p.st.disarm > 0;
+    $("#b-attack").title = seized ? "缴械中：本回合不能刀击" : (!p.hasKnife ? "尚未持刀：先购刀" : (!battle.opponentsOf(p).some(f => E.adj(p, f)) ? "无相邻敌人" : ""));
+    $("#b-horseatk").title = !p.hasHorse ? "尚未购马" : (!E.isWall(p.r, p.c) ? "你不在城墙上" : (!battle.opponentsOf(p).some(f => E.isWall(f.r, f.c) && E.manh(p, f) <= 3) ? "墙上无三格内的敌人" : (battle.rule && battle.rule.id === "suomen") ? "锁门特则：马踢封禁" : ""));
+    $("#b-drive").title = !p.hasHorse ? "尚未购马" : (E.isWall(p.r, p.c) ? "你在城墙上（驱赶仅限空地）" : ((battle.rule && battle.rule.id === "suomen") ? "锁门特则：封禁" : (!battle.opponentsOf(p).some(f => E.adj(p, f) && !E.isWall(f.r, f.c)) ? "无相邻的空地敌人" : "")));
     $("#b-blood").disabled = phaseLocked() || p.apNow <= 0 || p.hp < 2;
     const undoN = (p._undo && p._undo.length) || 0;
     $("#b-undo").disabled = phaseLocked() || undoN === 0;
