@@ -625,6 +625,44 @@ const EVENTS = [
     {who:'旁白', text:'彻夜苦练朵莉亚至四点。上学之时为五点。忽觉昏睡，为手机所砸而醒——其母在侧。'},
     {who:'晟翔', text:'晟翔未得上学当日。'},
   ]},
+
+/* ---- 马刀行 · 支线刀史（据卷八《马刀书》改编） ---- */
+{ id:'ev_xiehui', ch:9, day:1, periods:['noon','aft'], scene:'playground', pos:[750,450], name:'世界马刀协会成立', cast:['luhao','xiaochuan','zichen'], shard:null, flag:'xiehui',
+  script:[
+    {who:'旁白', text:'操场空地，五人聚义。桌上摆着一副手写的章程。'},
+    {who:'鲁豪', text:'世界马刀协会，今日立！吾与德艺、武、少年展、翼帆为委员。'},
+    {who:'小川', text:'章程第一条：以刀会友，重开重开，胜不骄败不馁。'},
+    {who:'子琛', text:'第二条：奉 wonder 为马刀之神。此通知尔，非求建议也。'},
+    {who:'音克思', text:'（史官执笔，亦执刀——协会名册上，给吾也留一行。）'},
+    {who:'旁白', text:'自此，操场空地成为马刀圣地。锦标赛与破败城墙之战，皆在此开刀。'},
+  ]},
+{ id:'ev_qiban', ch:10, day:2, periods:['aft'], scene:'classroom7', pos:[540,430], name:'七班刀来投', cast:['lifan','yongjun'], shard:null,
+  script:[
+    {who:'旁白', text:'七班的刀，自成一派。'},
+    {who:'李帆', text:'宝可梦马刀，吾之所创也。妙蛙种子，刀击有藤鞭加成——嘘，仙女的卡在此，莫传。'},
+    {who:'勇珺', text:'吾著《马刀法》一卷：血祭至多两连，种树至多三株，乱斗不得互相踢城。'},
+    {who:'音克思', text:'（六班刀与七班刀，至此合流。）'},
+  ]},
+{ id:'ev_jiuban', ch:10, day:3, periods:['noon'], scene:'corridor', pos:[400,260], name:'九班刀风', cast:['yurun'], shard:null,
+  script:[
+    {who:'毓润', text:'九班之刀，吾执牛耳！吾之角色，血二十，被动「清华大志」——'},
+    {who:'音克思', text:'（角色不平衡，刀风必崩。卷八有云：扩于九班，以角色不平衡而衰。）'},
+    {who:'毓润', text:'……汝何意？吾之刀，strong得很！'},
+  ]},
+{ id:'ev_daozhua', ch:13, day:2, periods:['eve'], scene:'classroom6', pos:[540,430], name:'刀卡之劫', cast:['touge','weibing'], shard:null,
+  script:[
+    {who:'旁白', text:'晚自习。为兵自后门悄然而入，直取头哥桌洞。'},
+    {who:'为兵', text:'豌豆射手，何为豌豆射手？大剑、火元素、蒙德——修逸用心甚矣。（拍照传其父母）'},
+    {who:'头哥', text:'（面不红，心不跳）……那是角色刀。马刀的。'},
+    {who:'音克思', text:'（风声渐紧。高三的刀，快到头了。）'},
+  ]},
+{ id:'ev_shilian', ch:11, day:3, periods:['eve'], scene:'playground', pos:[750,450], name:'马刀神的试炼', cast:['wonder'], shard:null, flag:'wonderTrial',
+  script:[
+    {who:'wonder', text:'汝既入协会，当过吾之一关。九省联考十八题，吾以牛顿定理破之——今日，汝就是那道题。'},
+    {who:'音克思', text:'（强化过的 wonder：血更厚，刀更狠。血祭两连，见祭速退。）'},
+    {who:'wonder', text:'GBC，算不算？来呀来呀！'},
+    {who:'旁白', text:'马刀神的试炼，随时可应——去操场寻他，来呀来呀。'},
+  ]},
 ];
 
 const EVENT_BY_ID = {};

@@ -183,6 +183,79 @@ if (sceneAttach === 'fresh') {
   check('再次回到校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));
 }
 
+// ===== 8. M3：协会锦标赛（三连战）+ 生存模式 =====
+await page.evaluate(() => {
+  while (G.ch < 9) Engine.nextChapter();     // 卷九
+  G.flags.xiehui = true;                     // 协会已立
+  World.travel('playground');
+  UI.updateHUD();
+});
+await page.waitForTimeout(800);
+// 走到操场空地触发 ctx 按钮
+await page.evaluate(() => World.walkTo(750, 450));
+await page.waitForTimeout(2200);
+const clubBtns = await page.evaluate(() => document.querySelector('#ctxbar').textContent);
+check('操场出现协会入口', clubBtns.includes('协会锦标赛') && clubBtns.includes('生存'));
+// 8a. 锦标赛
+await page.evaluate(() => { const b = [...document.querySelectorAll('#ctxbar .ctx-btn')].find(x => x.textContent.includes('锦标赛')); b && b.click(); });
+await page.waitForTimeout(1400);
+check('锦标赛开战', await page.evaluate(() => window.BATTLE_ACTIVE && window.SJI.battle.cfg.tournament === true));
+check('锦标赛三波配置', await page.evaluate(() => (window.SJI.battle.cfg.waves || []).length === 3));
+// 推进卷八开场剧本（空格翻页），等自动猜拳
+for (let i = 0; i < 20; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(300); }
+await page.waitForTimeout(1500);
+// 逐波天降正义：只在玩家阶段按空格，等下一波/下一回合就绪再动
+for (let w = 0; w < 30; w++) {
+  const st = await page.evaluate(() => {
+    const b = window.SJI.battle;
+    return { over: b.over, wave: b.waveIndex, foes: b.living('enemy').length, phase: b._playerPhaseActive === true };
+  });
+  if (st.over) break;
+  if (st.foes > 0) await page.evaluate(() => window.SJI_DEBUG.killEnemies());
+  else if (st.phase) await page.keyboard.press('Space');
+  await page.waitForTimeout(650);
+}
+await page.waitForTimeout(2500);
+const champ = await page.evaluate(() => ({
+  result: window.SJI.battle.result, wins: G.wins,
+  luhao: Blades.hasCard('luhao'), xiaochuan: Blades.hasCard('xiaochuan'), zichen: Blades.hasCard('zichen'),
+  ach: !!G.ach.ach_champion,
+}));
+check('锦标赛胜利', champ.result === 'win');
+check('三委员之技全录刀谱', champ.luhao && champ.xiaochuan && champ.zichen);
+check('协会冠军成就', champ.ach);
+await page.screenshot({ path: `${OUT}/m3-01-tournament.png` });
+await page.click('#r-menu');
+await page.waitForTimeout(700);
+check('锦标赛后回校园', await page.evaluate(() => !window.BATTLE_ACTIVE));
+// 8b. 生存模式
+await page.evaluate(() => { const b = [...document.querySelectorAll('#ctxbar .ctx-btn')].find(x => x.textContent.includes('生存')); b && b.click(); });
+await page.waitForTimeout(1600);
+check('生存开战', await page.evaluate(() => window.BATTLE_ACTIVE && window.SJI.battle.mode === 'survival'));
+for (let i = 0; i < 8; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(300); }
+// 打完第一波：杀敌 → 玩家阶段结束 → 波间增益点选 → 第二波
+for (let i = 0; i < 20; i++) {
+  const st = await page.evaluate(() => {
+    const b = window.SJI.battle;
+    return { over: b.over, foes: b.living('enemy').length, phase: b._playerPhaseActive === true, wave: b.survivalWaveNo };
+  });
+  if (st.over || st.wave >= 2) break;
+  if (st.foes > 0) await page.evaluate(() => window.SJI_DEBUG.killEnemies());
+  else if (st.phase) await page.keyboard.press('Space');
+  const boon = await page.$('#modal-box .boon-b');
+  if (boon) { await boon.click(); await page.waitForTimeout(400); }
+  await page.waitForTimeout(650);
+}
+await page.waitForTimeout(1500);
+const wave2 = await page.evaluate(() => window.SJI.battle.survivalWaveNo >= 2);
+check('生存进入第二波（增益已选）', wave2);
+await page.screenshot({ path: `${OUT}/m3-02-survival.png` });
+await page.evaluate(() => { window.SJI.battle.finish('lose'); });
+await page.waitForTimeout(2400);
+await page.click('#r-menu');
+await page.waitForTimeout(700);
+check('生存后回校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));
+
 // ===== 结果 =====
 console.log(errors.length ? '\n页面错误:\n' + errors.join('\n') : '\n无页面错误');
 console.log(fails === 0 ? '\n=== M1 SMOKE ALL PASS ===' : `\n!! ${fails} 项失败`);

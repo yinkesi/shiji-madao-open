@@ -21,6 +21,15 @@ const BLADE_RANKS = [
 /* 有些角色不出技卡（召唤/召唤物/纯辅助），只录其被动为注疏 */
 const NO_SKILL_CARD = { chongguo: true, tree: true, mob: true, keai: true };
 
+/* 行囊道具 → 战前一次性增益（来呀来呀前可择一使用） */
+const BATTLE_ITEMS = {
+  handcream: { boon: 'b_shield', label: '开局护盾 3' },
+  ruler:     { boon: 'b_knife', label: '刀击伤害 +1' },
+  corn:      { boon: 'b_firststrike', label: '每回合首刀 +1' },
+  bottle:    { boon: 'b_ap', label: '每回合行动点 +1' },
+  spin:      { boon: 'b_horse', label: '马踢伤害 +1' },
+};
+
 const Blades = (() => {
 
   const defaultSkill = () => ({
@@ -102,14 +111,21 @@ const Blades = (() => {
     return window.SJI_DATA.CHARACTERS.yinkesi;
   }
 
-  /* 开战前注入段位加成（在 Battle 构造后调用） */
+  /* 开战前注入段位加成与战大道具（在 Battle 构造后调用） */
   function applyBoons(battle) {
     const n = apBonus();
     for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
+    const itemId = (window.G && G.flags && G.flags.duelItem) || null;
+    if (itemId && BATTLE_ITEMS[itemId]) {
+      const boon = window.SJI_DATA.BOONS.find(b => b.id === BATTLE_ITEMS[itemId].boon);
+      if (boon) battle._applyBoon(battle.player, boon);
+      G.flags.duelItem = null;
+      if (window.Save) Save.write();
+    }
   }
 
   return { registerChar, grant, equip, cards, hasCard, skillCardOf, equippedSkillId,
-           rankName, nextRank, hpBonus, apBonus, applyBoons, BLADE_RANKS, defaultSkill };
+           rankName, nextRank, hpBonus, apBonus, applyBoons, BLADE_RANKS, defaultSkill, BATTLE_ITEMS };
 })();
 
 /* 载入即注册音克思战斗卡（G 未建时按 0 胜计；开战时 Blades.registerChar 会按最新胜场重算） */

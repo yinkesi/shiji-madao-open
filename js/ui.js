@@ -165,8 +165,13 @@ const UI = (() => {
         const card = el('div', 'card pcard');
         card.appendChild(World.avatarCanvas(p, 56));
         const info = el('div', '');
+        const bch = window.SJI_DATA && SJI_DATA.CHARACTERS[p.id];
+        const bladeLine = (met && bch)
+          ? `<div class="meta" style="color:var(--cinnabar)">马刀 · 被动「${bch.passive.name}」${bch.skill ? ` · 技「${bch.skill.name}」` : (bch.skills ? ` · 技「${bch.skills[0].name}」` : '')}</div>`
+          : '';
         info.innerHTML = `<div class="pname">${met || published ? p.name : '？？？'}<span class="phao">${met || published ? (p.hao || '') : '未识'}</span></div>
           <div class="pbio">${published ? p.bio : met ? p.intro + '<br><span class="muted">立传后解锁全文小传。</span>' : '尚未结识。多去校园里走走。'}</div>
+          ${bladeLine}
           ${published && p.quote ? `<div class="pquote">${p.quote}</div>` : ''}
           ${met && !published ? `<div class="muted" style="margin-top:4px">好感 ${Engine.favorOf(p.id)}${p.interview ? Engine.hasShard(p.interview.give) ? ' · 已采访' : ` · ${p.ivNeed != null ? p.ivNeed : 30} 可采访` : ''}</div>` : ''}`;
         card.appendChild(info);

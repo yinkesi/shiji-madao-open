@@ -106,11 +106,25 @@ const Main = (() => {
     if (!window.SJI_DATA.CHARACTERS[p.id]) { toast('此人不会马刀。', '刀'); return; }
     if ((G.flags.duelBanDays || 0) > 0) { toast(`刀具尚在钦法处（还押 ${G.flags.duelBanDays} 日），约战不得`, '禁'); return; }
     const pool = (p.chat && p.chat.length) ? p.chat : ['来呀来呀。'];
-    Dialog.play([
+    const script = [
       { who: p.hao || p.name, text: pick(pool) },
       { who: '音克思', text: '闲话少叙——马刀场上见真章。来呀来呀！' },
       { who: p.hao || p.name, text: pick(['来呀来呀，重开重开。', '规则至简，而引人入胜。——请。', '活者为王。开刀吧。']) },
-    ], () => {
+    ];
+    /* 行囊里有战大道具，可择一携之入场 */
+    const itemIds = Object.keys(G.bag).filter(k => G.bag[k] > 0 && Blades.BATTLE_ITEMS[k]);
+    if (itemIds.length) {
+      script.push({
+        choice: itemIds.map(id => ({
+          t: `携「${ITEM_BY_ID[id].name}」入场`, fx: Blades.BATTLE_ITEMS[id].label,
+          run() {
+            G.bag[id]--; G.flags.duelItem = id; Save.write();
+            return { say: { who: '旁白', text: `（${ITEM_BY_ID[id].name}入怀，刀意更稳。）` } };
+          },
+        })).concat([{ t: '空手赴战', fx: '来呀来呀', run() { return null; } }]),
+      });
+    }
+    Dialog.play(script, () => {
       knifeBanRiskOk(() => SJI_UI.startBattle(duelCfg(p)));
     });
   }
@@ -121,6 +135,19 @@ const Main = (() => {
       const win = b.result === 'win';
       const rankBefore = Blades.rankName();
       let extra = '<div class="result-extra">';
+      /* 生存模式：按波次结算 */
+      if (b.mode === 'survival') {
+        const reached = b.survivalWaveNo || 1;
+        const gained = Math.max(0, reached - 1) * 2;
+        Engine.addMoney(gained);
+        if (reached >= 3) { G.wins++; Engine.addRep(1); }
+        if (reached >= 10) Engine.award('ach_surv10');
+        extra += `<div>破败城墙，此行抵第 <b>${reached}</b> 波，零花钱 +${gained}。${reached >= 3 ? '计一胜。' : ''}</div>
+          <div class="yueks">音克思曰：苔藓覆其上，其高极大以至于不能尽。吾走之其上久——终将尽之。</div>`;
+        extra += '</div>';
+        Save.write();
+        return extra;
+      }
       if (win) {
         G.wins++;
         const foes = b.cfg.enemies || [];
@@ -133,13 +160,26 @@ const Main = (() => {
           if (PEOPLE_BY_ID[id]) Engine.addFavorQuiet(id, c.fresh ? 6 : 3);
         });
         Engine.addRep(2); Engine.addMoney(3);
-        const rankNow = Blades.rankName();
-        extra += `<div>胜${names.length > 1 ? '众刀手' : '「' + names[0] + '」'}，其名其技录入刀谱。好感与声望各有进益。</div>`;
-        if (rankNow !== rankBefore) {
-          toast(`刀道晋阶：「${rankNow}」`, '晋');
-          extra += `<div class="yueks">音克思曰：今日封「${rankNow}」。刀是死的，人是活的。</div>`;
+        /* 战斗成就 */
+        if (G.wins >= 1) Engine.award('ach_duel1');
+        if (G.wins >= 30) Engine.award('ach_duel30');
+        if (b.stats.usedBlood) Engine.award('ach_bloodwin');
+        if (!b.stats.everLeftWall) Engine.award('ach_wallwin');
+        if (b.cfg.tournament) {
+          ['luhao', 'xiaochuan', 'zichen'].forEach(id => Blades.grant(id));
+          Engine.addRep(4); Engine.addMoney(10);
+          Engine.award('ach_champion');
+          extra += `<div><b>锦标赛三连胜！</b>鲁豪、小川、子琛之技尽录刀谱。声望 +4 · 零花钱 +10。</div>
+            <div class="yueks">音克思曰：马刀大兴盛，汝今列席协会，与有荣焉。</div>`;
         } else {
-          extra += `<div class="yueks">音克思曰：规则至简，而引人入胜。${pick(['来呀来呀。', '活者为王。', '重开重开。'])}</div>`;
+          extra += `<div>胜${names.length > 1 ? '众刀手' : '「' + names[0] + '」'}，其名其技录入刀谱。好感与声望各有进益。</div>`;
+          const rankNow = Blades.rankName();
+          if (rankNow !== rankBefore) {
+            toast(`刀道晋阶：「${rankNow}」`, '晋');
+            extra += `<div class="yueks">音克思曰：今日封「${rankNow}」。刀是死的，人是活的。</div>`;
+          } else {
+            extra += `<div class="yueks">音克思曰：规则至简，而引人入胜。${pick(['来呀来呀。', '活者为王。', '重开重开。'])}</div>`;
+          }
         }
       } else {
         G.duelsLost++;
@@ -321,9 +361,12 @@ const Main = (() => {
       mk('就寝 →', 'accent', sleep);
       return;
     }
-    if (!near) return;
-    bar.classList.remove('hidden');
-    if (near.type === 'npc') {
+    const hasSceneAct = World.sceneId === 'library' || World.sceneId === 'shop' || World.sceneId === 'pingpong'
+      || World.sceneId === 'playground'
+      || ((World.sceneId === 'classroom6' || World.sceneId === 'classroom7') && (Engine.period() === 'morning' || Engine.period() === 'aft'));
+    if (!near && !hasSceneAct) return;
+    if (near) bar.classList.remove('hidden');
+    if (near && near.type === 'npc') {
       const p = near.p;
       const fav = Engine.favorOf(p.id);
       const head = el('span', 'ctx-name', p.hao || p.name);
@@ -354,17 +397,18 @@ const Main = (() => {
         duelBtn.onclick = () => challenge(p);
         bar.appendChild(duelBtn);
       }
-    } else if (near.type === 'event') {
+    } else if (near && near.type === 'event') {
       bar.appendChild(el('span', 'ctx-name', '「' + near.ev.name + '」'));
       const b = el('button', 'ctx-btn accent', '旁观亲历');
       b.onclick = () => playEvent(near.ev);
       bar.appendChild(b);
-    } else if (near.type === 'door') {
+    } else if (near && near.type === 'door') {
       const b = el('button', 'ctx-btn', '进入 · ' + near.door.label);
       b.onclick = () => World.travel(near.door.to);
       bar.appendChild(b);
     }
-    // 场景特有动作
+    // 场景特有动作（入景即可用，无需贴近谁）
+    if (hasSceneAct) bar.classList.remove('hidden');
     if (World.sceneId === 'library') {
       const b = el('button', 'ctx-btn', '读书 ⚡1 → 文笔+4');
       b.onclick = () => {
@@ -386,6 +430,17 @@ const Main = (() => {
       b.onclick = () => UI.panelShop();
       bar.appendChild(b);
     }
+    if (World.sceneId === 'playground' && G.ch >= 8) {
+      const clubOn = !!G.flags.xiehui;
+      const t = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '协会锦标赛 ⚡' : '协会未立（卷九后）');
+      if (!clubOn) t.disabled = true;
+      else t.onclick = () => { if (!Engine.spendAP(1)) return; startTournament(); };
+      bar.appendChild(t);
+      const s = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '破败城墙 · 生存 ⚡' : '生存未开');
+      if (!clubOn) s.disabled = true;
+      else s.onclick = () => { if (!Engine.spendAP(1)) return; startSurvival(); };
+      bar.appendChild(s);
+    }
     if (World.sceneId === 'pingpong') {
       const b = el('button', 'ctx-btn', '打乒乓球 ⚡1');
       b.onclick = () => {
@@ -400,6 +455,26 @@ const Main = (() => {
       };
       bar.appendChild(b);
     }
+  }
+
+  /* ---------- 马刀协会：锦标赛与生存（操场 · 协会立后开放） ---------- */
+  function startTournament() {
+    if (!window.SJI_SCENES) return;
+    const st = SJI_SCENES.stages.s8;
+    SJI_UI.startBattle({
+      mode: 'story', tournament: true,
+      title: '世界马刀协会 · 锦标赛', playerChar: 'yinkesi',
+      enemies: ['luhao'], waves: [['luhao'], ['xiaochuan'], ['zichen']],
+      allies: [], diff: duelDiff(), aiAggr: 'active',
+      stage: { id: 's8', hpScale: 0.68, restFull: true },
+      introScene: st.intro,
+    });
+  }
+  function startSurvival() {
+    SJI_UI.startBattle({
+      mode: 'survival', title: '破败城墙 · 生存', playerChar: 'yinkesi',
+      diff: duelDiff(), aiAggr: 'active',
+    });
   }
 
   function afterAction() {
@@ -459,6 +534,7 @@ const Main = (() => {
   function playEvent(ev) {
     Dialog.play(ev.script, () => {
       G.doneEvents.push(ev.id);
+      if (ev.flag) { G.flags[ev.flag] = true; toast('新去处已开：' + ev.name, '开'); }
       // 亲历其事，当事人好感微增（不打扰，合并一条提示）
       if (ev.cast && ev.cast.length) {
         ev.cast.forEach(id => PEOPLE_BY_ID[id] && Engine.addFavorQuiet(id, 2));
@@ -514,8 +590,7 @@ const Main = (() => {
     }
   }
 
-  /* ---------- 世界回调 ---------- */
-  function onCtxChange(near) { updateCtx(near); }
+  /* ---------- 世界回调 ---------- */  function onCtxChange(near) { updateCtx(near); }
   function onNPC(p) {
     if (Dialog.active || MG.active) return;
     const pos = World.npcPos(p.id);
@@ -659,7 +734,8 @@ const Main = (() => {
   }
 
   return { boot, onNPC, onEvent, afterDialog, updateCtx, onCtxChange,
-           challenge, startDuel: p => SJI_UI.startBattle(duelCfg(p)), panelBlades, normalizeG };
+           challenge, startDuel: p => SJI_UI.startBattle(duelCfg(p)), panelBlades, normalizeG,
+           startTournament, startSurvival };
 })();
 
 window.addEventListener('DOMContentLoaded', () => Main.boot());
