@@ -130,14 +130,28 @@ const Dialog = (() => {
   }
 
   function finish() {
+    if (!active) return;
     active = false;
-    Spring.make({ x0: 0, target: 40, damping: 1, response: 0.25, update: x => { box.style.transform = `translateY(${x}px)`; box.style.opacity = String(1 - x / 60); }, done: () => {
-      root.classList.add('hidden'); cast.innerHTML = ''; figs = {}; box.style.transform = ''; box.style.opacity = '';
+    /* 弹簧只负责视觉滑出；收尾与回调（onDone）必须保证执行，不能被动画链的健康状况拖累。
+       之前出现过"对话结束回调丢失 → 后续流程（开战/战后一幕）永远不触发"的隐患。 */
+    let fired = false;
+    const cleanup = () => {
+      if (fired) return; fired = true;
+      root.classList.add('hidden'); cast.innerHTML = ''; figs = {};
+      box.style.transform = ''; box.style.opacity = '';
       Main.afterDialog();
       World.resetNear();
       flushToasts();
       const cb = onDone; onDone = null; cb && cb();
-    } });
+    };
+    try {
+      Spring.make({
+        x0: 0, target: 40, damping: 1, response: 0.25,
+        update: x => { box.style.transform = `translateY(${x}px)`; box.style.opacity = String(1 - x / 60); },
+        done: cleanup,
+      });
+    } catch (e) { cleanup(); return; }
+    setTimeout(cleanup, 320);
   }
 
   return {

@@ -42,7 +42,8 @@ const UPGRADES = [
 ];
 const UPGRADE_BOON = { knife: 'b_knife', horse: 'b_horse', dodge: 'b_dodge', regen: 'b_regen', cd: 'b_cd', ap: 'b_ap' };
 
-/* 稀有刀卡：高难试炼首通所授的质变被动（每场常驻） */
+/* 稀有刀卡：高难试炼首通 / 支线所授的质变被动（每场常驻）
+   注：每条都必须在 SJI_DATA.BOONS 里有对应的可注入增益，否则 applyBoons 静默失效 */
 const RARE_BOONS = {
   b_bloodfree:   { name: '以道代血', desc: '血祭不再损血，只耗行动点。（道之所在，血不轻洒）' },
   b_cleave:      { name: '刀扫一片', desc: '刀击同时波及相邻的另一名敌人。（马刀本是横扫之术）' },
@@ -50,6 +51,7 @@ const RARE_BOONS = {
   b_killheal:    { name: '庆功之宴', desc: '击破敌人回复 4 血，原为 2。（大胜而归，理当加餐）' },
   b_shield:      { name: '班主任的偏爱', desc: '每场开局获得 3 点护盾。（含笑素善大哥，此之谓也）' },
   b_firststrike: { name: '先手刀', desc: '每回合首次刀击伤害 +1。（唯快不破）' },
+  b_horse:       { name: '马踏连营', desc: '马踢伤害 +1（与修炼「马政」可叠加）。（一连踏营，声势浩大）' },
 };
 
 const Blades = (() => {

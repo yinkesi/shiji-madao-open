@@ -33,11 +33,9 @@ const Main = (() => {
     const [px, py] = World.playerPos;
     if (Math.hypot(pos[0] - px, pos[1] - py) > 90) { World.walkTo(pos[0], pos[1] + 40); return; }
     const isMain = Quests.current() && Quests.current().id === q.id;
-    Dialog.play([
-      { who: '音克思', text: (isMain ? '【主线】' : '【支线】') + q.name + '——' + q.goal },
-      { who: '音克思', text: '（' + q.hint + '）' },
-      { who: '对手', text: pick(['来呀来呀。', '规则至简，而引人入胜。', '既来之，则战之。', '重开重开，谁怕谁。']) },
-    ], () => Quests.pickAndStart(q));
+    /* 专属战前剧情；缺数据时退回通用脚本 */
+    const script = Quests.preScript(q) || Quests.fallbackPre(q, isMain);
+    Dialog.play(script, () => Quests.pickAndStart(q));
   }
 
   function panelQuests() {
@@ -127,13 +125,13 @@ const Main = (() => {
     return cfg;
   }
 
-  /* 刀禁期（高三·十二月起，师怒禁刀）：课上时段于教室楼内约战，可能被钦法连人带刀收缴 */
+  /* 刀禁期（G.ch ≥ 12，即主线「刀禁令风波」之后）：楼内约战可能被钦法连人带刀收缴。
+     自由开放世界：只与地点有关，不再限时段。 */
   function knifeBanRiskOk(onDecide) {
     if (G.ch < 12) { onDecide(); return; }
     if (G.flags.duelBanDays > 0) { toast(`刀具尚在钦法处（还押 ${G.flags.duelBanDays} 日），约战不得`, '禁'); return; }
-    const per = Engine.period();
     const safe = ['dorm', 'playground', 'gate', 'canteen'].includes(World.sceneId);
-    if ((per !== 'morning' && per !== 'aft') || safe || Math.random() > 0.25) { onDecide(); return; }
+    if (safe || Math.random() > 0.25) { onDecide(); return; }
     Dialog.play([
       { who: '钦法', text: '（从走廊尽头逼近）此何课也？尔等围于此，所为何物？' },
       { choice: [
@@ -234,8 +232,7 @@ const Main = (() => {
         if (b.cfg.questId) {
           const q = Quests.byId(b.cfg.questId);
           if (q && !Quests.done(q.id)) extra += Quests.complete(q);
-        }
-        /* 高难试炼首通：追加稀有刀卡 */
+        }        /* 高难试炼首通：追加稀有刀卡 */
         if (b.cfg.trialId && !G.trialDone[b.cfg.trialId]) {
           const t = trialById(b.cfg.trialId);
           G.trialDone[t.id] = true;
@@ -267,6 +264,11 @@ const Main = (() => {
         const foeId = (b.cfg.enemies || [])[0];
         const ch = foeId && window.SJI_DATA.CHARACTERS[foeId];
         if (foeId && PEOPLE_BY_ID[foeId]) Engine.addFavorQuiet(foeId, -1);
+        /* 任务战败：挂起战败后的一段（回世界后播） */
+        if (b.cfg.questId) {
+          const q = Quests.byId(b.cfg.questId);
+          if (q) { Quests.stashPost(q, false); extra += `<div class="muted" style="margin-top:4px">▸ 返回校园后，尚有一幕。</div>`; }
+        }
         extra += `<div>败于${ch ? '「' + ch.hao + '」' : '刀下'}。胜负乃兵家常事。</div>
           <div class="yueks">音克思曰：${pick(['重开重开！', '既毕业，无复有刀者，悲哉——故今日之败，不足记也。', '汝倒下了。但史官还站着。'])}</div>`;
       }
@@ -277,13 +279,18 @@ const Main = (() => {
     onDone() {
       afterAction();
       World.refresh();
-      /* 主线推进带来的章节变化 → 回世界后弹一道里程碑卡 */
+      /* 回到世界后：先弹主线里程碑卡（若有），再播战后收束一幕 */
+      const playPost = () => {
+        const post = Quests.takePendingPost();
+        if (!post) return;
+        Dialog.play(post, () => { UI.updateHUD(); Quests.render(); Save.write(); });
+      };
       const ch = Engine.takePendingChapter();
       if (ch != null && CHAPTERS[ch]) {
         showChapterCard(CHAPTERS[ch], () => {
-          UI.updateHUD(); UI.renderHearsay(); Quests.render();
+          UI.updateHUD(); UI.renderHearsay(); Quests.render(); playPost();
         });
-      }
+      } else playPost();
     },
   };
 

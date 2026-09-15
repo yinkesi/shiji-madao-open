@@ -13,13 +13,36 @@ fs.mkdirSync(OUT, { recursive: true });
 const errors = [];
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
-page.on('console', m => { if (m.type() === 'error') errors.push('CONSOLE: ' + m.text()); });
+page.on('pageerror', e => { errors.push('PAGEERROR: ' + e.message); console.log('  [页面错误] ' + e.message); });
+page.on('console', m => { if (m.type() === 'error') { errors.push('CONSOLE: ' + m.text()); console.log('  [控制台错误] ' + m.text()); } });
 
 let fails = 0;
 const check = (name, cond, extra) => {
   console.log(`  ${cond ? 'PASS' : 'FAIL'}  ${name}${extra !== undefined ? '  (' + extra + ')' : ''}`);
   if (!cond) fails++;
+};
+/* 点掉当前世界对话（打字机动画会让一行吃两次点击，故给足次数并读到关闭为止） */
+const clearDialog = async (max = 40, tag = '') => {
+  for (let i = 0; i < max; i++) {
+    const active = await page.evaluate(() => typeof Dialog === 'undefined' ? false : Dialog.active);
+    if (!active) { if (tag) console.log(`  [clearDialog${tag}] 第 ${i} 次后关闭`); return true; }
+    if (tag && i < 24) console.log(`  [clearDialog${tag}] #${i}`, await page.evaluate(() => ({
+      typing: document.querySelector('#dialog-text').classList.contains('typing'),
+      text: document.querySelector('#dialog-text').textContent.slice(0, 12),
+    })).then(s => JSON.stringify(s)));
+    await page.click('#dialog-box');
+    await page.waitForTimeout(220);
+  }
+  if (tag) console.log(`  [clearDialog${tag}] 点满 ${max} 次仍未关闭`);
+  return false;
+};
+/* 轮询等待页面条件成立（对话结束后的回调挂在弹簧动画里，固定 sleep 是临界值） */
+const waitFor = async (fn, tries = 30, gap = 150) => {
+  for (let i = 0; i < tries; i++) {
+    if (await page.evaluate(fn)) return true;
+    await page.waitForTimeout(gap);
+  }
+  return false;
 };
 
 await page.goto(pathToFileURL(HTML).href);
@@ -210,13 +233,18 @@ for (let i = 0; i < 8; i++) {
   if (await page.evaluate(() => Dialog.active)) break;
 }
 check('走近「令」标记弹出接战对话', await page.evaluate(() => Dialog.active));
-for (let i = 0; i < 12; i++) {
-  if (await page.evaluate(() => !Dialog.active)) break;
-  await page.click('#dialog-box');
-  await page.waitForTimeout(280);
-}
-await page.waitForTimeout(900);
-check('主线任务开战（cfg.questId=m1）', await page.evaluate(() => window.BATTLE_ACTIVE && window.SJI.battle.cfg.questId === 'm1'));
+// 战前剧情应为该节专属（而非通用兜底句）
+const m1pre = await page.evaluate(() => document.querySelector('#dialog-text').textContent);
+check('战前播的是 m1 专属剧情', /马刀场|题？给我|踩秃/.test(m1pre), m1pre.slice(0, 26));
+await clearDialog();
+// 名册只有音克思时是直接开战；对话结束回调经弹簧动画触发，须轮询等（固定 sleep 是临界值）
+const started = await waitFor(() => !!window.BATTLE_ACTIVE);
+const dbg = started ? '' : JSON.stringify(await page.evaluate(() => ({
+  scene: World.sceneId, dlg: Dialog.active, dlgVis: !document.querySelector('#dialog').classList.contains('hidden'),
+  battle: !!window.BATTLE_ACTIVE, panelVis: !document.querySelector('#panel').classList.contains('hidden'),
+})));
+check('主线任务开战（cfg.questId=m1）', started && await page.evaluate(() => window.SJI.battle.cfg.questId === 'm1'),
+  started ? await page.evaluate(() => window.SJI.battle.cfg.title) : '未开战 ' + dbg);
 for (let i = 0; i < 14; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(300); }
 await page.waitForTimeout(2600);
 await page.evaluate(() => window.SJI_DEBUG.killEnemies());
@@ -239,9 +267,25 @@ check('章节随主线推进（ch 0 → 1）', m1res.ch === 1, 'ch=' + m1res.ch)
 await page.screenshot({ path: `${OUT}/m2-04-quest-result.png` });
 await page.click('#r-menu');
 await page.waitForTimeout(800);
-// 主线推进后回世界会弹一道里程碑卡，点掉它以免挡住后续点击
-try { await page.click('#chapter-card', { timeout: 2500 }); } catch (e) {}
-await page.waitForTimeout(600);
+// 主线推进后回世界会弹一道里程碑卡；点掉它，随后应自动播出战后收束一幕
+try { await page.click('#chapter-card', { timeout: 3000 }); } catch (e) {}
+const postShown = await waitFor(() => typeof Dialog !== 'undefined' && Dialog.active);
+const m1post = await page.evaluate(() => (Dialog.active ? document.querySelector('#dialog-text').textContent : ''));
+check('回世界后先弹章节里程碑卡、再播战后收束一幕', postShown, m1post.slice(0, 26));
+const m1postAll = await page.evaluate(async () => {
+  let acc = '';
+  for (let i = 0; i < 24; i++) {
+    if (!Dialog.active) break;
+    acc += document.querySelector('#dialog-text').textContent;
+    document.querySelector('#dialog-box').click();
+    await new Promise(r => setTimeout(r, 220));
+  }
+  return acc;
+});
+check('战后一幕为 m1 专属（非通用句）', /斜线|几何|立传者，先立于场上/.test(m1postAll), m1postAll.slice(0, 40));
+await clearDialog();
+await page.waitForTimeout(500);
+check('战后一幕播毕，世界恢复可操作', await page.evaluate(() => !Dialog.active && !window.BATTLE_ACTIVE && World.active));
 const qcardNext = await page.evaluate(() => document.querySelector('#questcard').textContent.replace(/\s+/g, ' '));
 check('任务卡自动刷新为下一节「实验三异能者」', qcardNext.includes('实验三异能者'), qcardNext.slice(0, 44));
 check('任务卡主线进度刷新为 1/9', await page.evaluate(() => document.querySelector('#hud-ap-v').textContent === '1/9'));

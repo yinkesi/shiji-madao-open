@@ -11,13 +11,37 @@ const HTML = path.join(ROOT, '..', 'index.html');
 const errors = [];
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
-page.on('console', m => { if (m.type() === 'error') errors.push('CONSOLE: ' + m.text()); });
+page.on('pageerror', e => { errors.push('PAGEERROR: ' + e.message); console.log('  [页面错误] ' + e.message); });
+page.on('console', m => { if (m.type() === 'error') { errors.push('CONSOLE: ' + m.text()); console.log('  [控制台错误] ' + m.text()); } });
 
 let fails = 0;
 const check = (name, cond, extra) => {
   console.log(`  ${cond ? 'PASS' : 'FAIL'}  ${name}${extra !== undefined ? '  (' + extra + ')' : ''}`);
   if (!cond) fails++;
+};
+
+/* 轮询等待：对话结束后的回调挂在弹簧动画里，固定 sleep 是临界值 */
+const waitFor = async (fn, tries = 30, gap = 150) => {
+  for (let i = 0; i < tries; i++) {
+    if (await page.evaluate(fn)) return true;
+    await page.waitForTimeout(gap);
+  }
+  return false;
+};
+const clearDialog = async (max = 40, tag = '') => {
+  for (let i = 0; i < max; i++) {
+    const st = await page.evaluate(() => ({
+      active: typeof Dialog !== 'undefined' && Dialog.active,
+      typing: document.querySelector('#dialog-text').classList.contains('typing'),
+      text: document.querySelector('#dialog-text').textContent.slice(0, 12),
+    }));
+    if (!st.active) { if (tag) console.log(`  [clearDialog${tag}] 第 ${i} 次后关闭`); return true; }
+    if (tag && i < 26) console.log(`  [clearDialog${tag}] #${i}`, JSON.stringify(st));
+    await page.click('#dialog-box');
+    await page.waitForTimeout(220);
+  }
+  if (tag) console.log(`  [clearDialog${tag}] 点满 ${max} 次仍未关闭`);
+  return false;
 };
 
 await page.goto(pathToFileURL(HTML).href);
@@ -181,14 +205,72 @@ const unlock = await page.evaluate(() => {
 check('完成支线后强力人物入册', unlock.after.includes('dage') && !unlock.before.includes('dage'), unlock.after.join(','));
 check('结算文案点明「强力人物解锁」', unlock.hasText === true);
 
-// 点将面板：roster > 1 时应弹选择面板，选大哥后以其本卡出战
-const pick = await page.evaluate(async () => {
-  const q = Quests.byId('s_luhao');
-  Quests.pickAndStart(q);
-  const names = [...document.querySelectorAll('#panel-body .card h3')].map(h => h.textContent.trim());
-  return { title: document.querySelector('#panel-title').textContent, names };
+// ===== 10. 剧情文本：每节都必须有专属的战前/战胜/战败/挑衅台词 =====
+const story = await page.evaluate(() => {
+  const miss = [];
+  let chars = 0;
+  Quests.all().forEach(q => {
+    ['pre', 'post', 'postLose'].forEach(k => {
+      if (!Array.isArray(q[k]) || !q[k].length) miss.push(q.id + '.' + k);
+      else chars += q[k].reduce((a, s) => a + (s.text || '').length, 0);
+    });
+    if (!q.foe || !q.foe.who || !Array.isArray(q.foe.pool) || !q.foe.pool.length) miss.push(q.id + '.foe');
+    else chars += q.foe.pool.join('').length;
+    chars += (q.goal || '').length + (q.hint || '').length;
+  });
+  // 通用兜底句不得出现在任何节里（否则说明那节没写专属台词）
+  const generic = ['既来之，则战之。', '重开重开，谁怕谁。'];
+  const leaked = Quests.all().filter(q => q.foe && q.foe.pool.some(l => generic.includes(l))).map(q => q.id);
+  return { n: Quests.all().length, miss, chars, leaked };
 });
-check('点将面板弹出并列出可选之人', /点将出征/.test(pick.title) && pick.names.length >= 2, pick.names.join(' | ').slice(0, 80));
+check(`主线+支线共 ${story.n} 节，全部备齐 pre/post/postLose/foe`, story.miss.length === 0, story.miss.join(',') || '齐');
+check('剧情文本体量 > 4000 字（重构前仅 283 字）', story.chars > 4000, story.chars + ' 字');
+check('无任何节沿用通用兜底台词', story.leaked.length === 0, story.leaked.join(',') || '无');
+
+// 奖励可发放性：曾出现支线奖励写 rare:'b_horse' 但 RARE_BOONS 无此条目 → 打通了也什么都拿不到、还不报错
+const rareOk = await page.evaluate(() => {
+  const bad = [];
+  Quests.all().forEach(q => {
+    const r = q.reward && q.reward.rare;
+    if (!r) return;
+    if (!Blades.RARE_BOONS[r]) bad.push(q.id + ' 缺 RARE_BOONS');
+    if (!window.SJI_DATA.BOONS.some(b => b.id === r)) bad.push(q.id + ' 缺 BOONS');
+    if (q.reward.unlock && !window.SJI_DATA.CHARACTERS[q.reward.unlock]) bad.push(q.id + ' 解锁人物不存在');
+  });
+  return bad;
+});
+check('所有任务的稀有刀卡/解锁人物都能真正兑现', rareOk.length === 0, rareOk.join(', ') || '齐');
+
+// ===== 11. 战前/战后对话真的会播（走真实链路：走近 → 战前 → 点将 → 开战 → 回世界 → 战后） =====
+// 先清掉第 4 节直接 complete() 留下的挂起状态（章节里程碑卡 + 战后对话），避免串场；
+// 真实流程里这两者都由同一场战斗的 onResult/onDone 成对消费，不会残留。
+await page.evaluate(() => { Engine.takePendingChapter(); Quests.takePendingPost(); });
+await page.evaluate(() => World.travel('dorm'));
+await page.waitForTimeout(700);
+for (let i = 0; i < 8; i++) {
+  await page.evaluate(() => Main.onQuest(Quests.byId('s_luhao')));
+  await page.waitForTimeout(850);
+  if (await page.evaluate(() => Dialog.active)) break;
+}
+const preText = await page.evaluate(() => (Dialog.active ? document.querySelector('#dialog-text').textContent : ''));
+check('走近支线后弹出战前对话', await page.evaluate(() => Dialog.active), preText.slice(0, 24));
+/* 打字机动画会让一行吃两次点击（先补完、再翻页），故给足次数；只以「对话结束」为退出条件 */
+await clearDialog(40, ':s_luhao');
+// 名册 > 1 时应弹点将面板；对话结束回调经弹簧动画触发，须轮询等
+await waitFor(() => !!window.BATTLE_ACTIVE || /点将出征/.test(document.querySelector('#panel-title').textContent));
+/* 注意：#panel-title 关面板后不会清空，须连「面板可见」一起判 */
+const pickPanel = await page.evaluate(() => ({
+  on: !document.querySelector('#panel').classList.contains('hidden'),
+  title: document.querySelector('#panel-title').textContent,
+  names: [...document.querySelectorAll('#panel-body .card h3')].map(h => h.textContent.trim()),
+  battle: !!window.BATTLE_ACTIVE,
+  dlg: typeof Dialog !== 'undefined' && Dialog.active,
+  dlgVis: !document.querySelector('#dialog').classList.contains('hidden'),
+  roster: Quests.roster().length,
+}));
+check('点将面板弹出并列出可选之人', pickPanel.on && /点将出征/.test(pickPanel.title),
+  JSON.stringify({ on: pickPanel.on, title: pickPanel.title, battle: pickPanel.battle, dlg: pickPanel.dlg, roster: pickPanel.roster }));
+check('可选之人含支线解锁的「大哥」', pickPanel.names.some(n => n.includes('大哥')), pickPanel.names.length + ' 人');
 await page.evaluate(() => {
   const cards = [...document.querySelectorAll('#panel-body .card')];
   const hit = cards.find(c => c.textContent.includes('大哥'));
@@ -219,6 +301,66 @@ check('支线战斗结算并记为完成', afterSide.done === true, JSON.stringi
 await page.click('#r-menu');
 await page.waitForTimeout(900);
 check('支线后回到校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));
+// 战后收束一幕应在回到世界后自动播出
+const postShown = await waitFor(() => typeof Dialog !== 'undefined' && Dialog.active);
+const postText = await page.evaluate(() => (Dialog.active ? document.querySelector('#dialog-text').textContent : ''));
+check('回到世界后自动播出战后收束一幕', postShown, postText.slice(0, 24));
+const postAll = await page.evaluate(async () => {
+  let acc = '';
+  for (let i = 0; i < 24; i++) {
+    if (!Dialog.active) break;
+    acc += document.querySelector('#dialog-text').textContent;
+    document.querySelector('#dialog-box').click();
+    await new Promise(r => setTimeout(r, 220));
+  }
+  return acc;
+});
+check('战后一幕内容为该节专属（非通用句）',
+  /桌洞里抢回|锦绣|绍铭/.test(postAll), postAll.slice(0, 40));
+
+// ===== 12. 老档迁移：有章节进度、无任务记录（旧格式存档） =====
+const LEGACY = {
+  ver: 1, ch: 9, day: 3, periodIdx: 2, ap: 1, apMax: 3,
+  wen: 30, rep: 70, money: 40,
+  favor: { dage: 50, xinhui: 40 }, shards: { sh_shuban: { src: 'scene', wen: 5 } },
+  doneEvents: ['ev_shuban'], vols: {}, giftToday: {}, chatCount: 0, caughtToday: false,
+  bag: { snack: 1 }, ach: { ach_duel1: 1 },
+  flags: { visitedScenes: ['library'], metPeople: ['dage'], prologue: true, duelBanDays: 0 },
+  wins: 12, duelsLost: 3,
+  blades: { cards: ['xinhui', 'dage'], equip: 'xinhui', rare: ['b_killheal'] },
+  upgrades: { hp: 2, knife: 1 }, trialDone: {}, duelDone: {},
+  settings: { muted: false, motion: 'full', speed: 1 },
+  stats: { chats: 5, gifts: 2, reads: 1, gossip: 0, caught: 0, listened: 0, direct: 0, curve: 0, plays: {}, published: 0 },
+};
+await page.evaluate(s => { localStorage.setItem('shiji_cqb_v1', JSON.stringify(s)); }, LEGACY);
+await page.reload();
+await page.waitForTimeout(900);
+const canContinue = await page.evaluate(() => !document.querySelector('#btn-continue').classList.contains('hidden'));
+check('旧档可被识别（出现「继续上局」）', canContinue === true);
+await page.click('#btn-continue');
+await page.waitForTimeout(1500);
+const migrated = await page.evaluate(() => ({
+  ch: G.ch, day: G.day, wins: G.wins, money: G.money,
+  cards: G.blades.cards.slice(), rare: G.blades.rare.slice(),
+  upgrades: JSON.parse(JSON.stringify(G.upgrades)),
+  roster: Quests.roster().slice(),
+  nQuests: Object.keys(G.quests).length,
+  xiehui: !!G.flags.xiehui,
+  cur: Quests.current() && Quests.current().id,
+  label: Quests.progressLabel(),
+  flag: !!G.flags.legacyMigrated,
+  toasts: document.querySelector('#toasts').textContent,
+}));
+check('旧档进度原样保留（胜场/刀谱/稀有卡/修炼/钱）',
+  migrated.wins === 12 && migrated.cards.includes('dage') && migrated.rare.includes('b_killheal')
+  && migrated.upgrades.hp === 2 && migrated.money === 40,
+  JSON.stringify({ wins: migrated.wins, cards: migrated.cards, rare: migrated.rare, up: migrated.upgrades }));
+check('旧档章节不倒退（ch 仍为 9）', migrated.ch >= 9, 'ch=' + migrated.ch);
+check('主线九节从头接起（当前 m1、任务记录为空）',
+  migrated.cur === 'm1' && migrated.nQuests === 0 && migrated.label === '0/9', migrated.label);
+check('按章节补齐协会解锁（ch≥8 → 协会开张）', migrated.xiehui === true);
+check('给出迁移说明提示', /旧档已并入刀史/.test(migrated.toasts), migrated.toasts.slice(0, 40));
+check('迁移提示只出一次（标记已消费）', migrated.flag === false);
 
 console.log(errors.length ? '\n页面错误:\n' + errors.join('\n') : '\n无页面错误');
 console.log(fails === 0 ? '\n=== 剧情链路 ALL PASS ===' : `\n!! ${fails} 项失败`);

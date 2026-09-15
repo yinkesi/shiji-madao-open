@@ -126,6 +126,8 @@ const World = (() => {
     for (const ev of Engine.eventsNow()) {
       if (ev.cast.includes(p.id)) return { scene: ev.scene, pos: ev.pos.slice(), busy: true };
     }
+    /* 时段（Engine.period）在此**只作氛围调度**（每天随机轮换），不再门控任何玩法：
+       它决定 NPC 此刻更像在教室、在食堂还是在走廊，仅此而已。 */
     const per = Engine.period();
     if (G.ch >= 15 && PEOPLE_WAI.some(w => w.id === p.id)) return { scene: 'gate', pos: [700, 300] };
     if (p.role === 'p') return { scene: 'office', pos: SCENE_BY_ID.office.spots.of_head };
@@ -151,13 +153,29 @@ const World = (() => {
   }
 
   /* ---- 场景 ---- */
+  /* 落点避让：默认/门口落点可能恰好踩在道具碰撞盒里（曾在走廊长椅、食堂圆桌、
+     宿舍柜、办公楼档案柜四处复现"落地即卡死"），故就近找一个能站的位置 */
+  function freeSpot(x, y) {
+    if (!collides(x, y)) return [x, y];
+    for (let r = 26; r <= 300; r += 22) {
+      for (let a = 0; a < 16; a++) {
+        const nx = x + Math.cos(a / 16 * Math.PI * 2) * r;
+        const ny = y + Math.sin(a / 16 * Math.PI * 2) * r;
+        if (!collides(nx, ny)) return [nx, ny];
+      }
+    }
+    return [x, y];
+  }
   function enterScene(id, atDoor) {
     scene = SCENE_BY_ID[id]; sceneId = id;
     if (!G.flags.visitedScenes.includes(id)) G.flags.visitedScenes.push(id);
     G.flags.lastScene = id;
     buildGrid();
-    if (atDoor) { player.x = clamp(atDoor[0], 40, scene.w - 40); player.y = clamp(atDoor[1], 40, scene.h - 40); }
-    else { player.x = scene.w / 2; player.y = scene.h - 110; }
+    let sx, sy;
+    if (atDoor) { sx = clamp(atDoor[0], 40, scene.w - 40); sy = clamp(atDoor[1], 40, scene.h - 40); }
+    else { sx = scene.w / 2; sy = scene.h - 110; }
+    const sp = freeSpot(sx, sy);
+    player.x = sp[0]; player.y = sp[1];
     player.path = [];
     refreshNPCs();
     UI.renderPlaces();
@@ -310,7 +328,7 @@ const World = (() => {
     sortables.push({ y: player.y, draw: () => drawPlayer(now) });
     sortables.sort((a, b) => a.y - b.y).forEach(o => o.draw());
     ctx.restore();
-    // 时段氛围
+    // 时段氛围（纯视觉：晨光/午后/夜色，无玩法含义）
     const per = Engine.period();
     if (per === 'morning') { ctx.fillStyle = 'rgba(255,190,120,.10)'; ctx.fillRect(0, 0, vw, vh); }
     else if (per === 'aft') { ctx.fillStyle = 'rgba(255,215,150,.07)'; ctx.fillRect(0, 0, vw, vh); }
@@ -417,7 +435,9 @@ const World = (() => {
       const mk = Quests.markers().find(mk => {
         if (mk.q.where !== sceneId) return false;
         const mp = mk.dpos || mk.q.pos;
-        return Math.hypot(w.x - mp[0], w.y - mp[1] + 26) < 46;
+        /* 只认气泡与名牌本身（约锚点上 -52 与 -22 两处），
+           勿把附近的地面点击抢走（否则会出现"不由自主被拉向标记"） */
+        return Math.hypot(w.x - mp[0], w.y - (mp[1] - 37)) < 30;
       });
       if (mk) { Main.onQuest(mk.q); return; }
     }

@@ -24,15 +24,19 @@ const Spring = (() => {
     const now = performance.now();
     springs.forEach(s => {
       if (s.cancelled) { springs.delete(s); return; }
-      const dt = Math.min(0.032, (now - s.last) / 1000); s.last = now;
-      // 半隐式欧拉积分
-      const omega = 2 * Math.PI / Math.max(0.01, s.response);
-      s.v += (-omega * omega * (s.x - s.target) - 2 * s.damping * omega * s.v) * dt;
-      s.x += s.v * dt;
-      if (Math.abs(s.x - s.target) < 0.001 && Math.abs(s.v) < 0.001) {
-        s.x = s.target; s.v = 0; springs.delete(s); s.done && s.done();
-      }
-      s.update(s.x, s.v);
+      /* 单个弹簧回调出错不能拖垮整条动画链（否则后续所有弹簧都停摆，
+         表现为"对话/面板卡住、回调丢失、世界像被冻住"） */
+      try {
+        const dt = Math.min(0.032, (now - s.last) / 1000); s.last = now;
+        // 半隐式欧拉积分
+        const omega = 2 * Math.PI / Math.max(0.01, s.response);
+        s.v += (-omega * omega * (s.x - s.target) - 2 * s.damping * omega * s.v) * dt;
+        s.x += s.v * dt;
+        if (Math.abs(s.x - s.target) < 0.001 && Math.abs(s.v) < 0.001) {
+          s.x = s.target; s.v = 0; springs.delete(s); s.done && s.done();
+        }
+        s.update(s.x, s.v);
+      } catch (e) { springs.delete(s); try { console.error(e); } catch (e2) {} }
     });
     if (springs.size) requestAnimationFrame(tick); else running = false;
   }
@@ -69,11 +73,20 @@ const SheetFX = {
     if (panel._closeSpring) panel._closeSpring.cancelled = true;
     const st = getComputedStyle(panel).transform;
     const m = new DOMMatrixReadOnly(st === 'none' ? '' : st);
-    panel._closeSpring = Spring.make({
-      x0: m.m42 || 0, target: panel.offsetHeight + 60, damping: 1.0, response: 0.28,
-      update: x => { panel.style.transform = `translateX(-50%) translateY(${x}px)`; },
-      done: () => { panel.classList.add('hidden'); panel._closeSpring = null; cb && cb(); },
-    });
+    /* 弹簧只负责视觉滑出；收尾（隐藏层 + 回调）必须保证执行，故加超时兜底 */
+    let fired = false;
+    const done = () => {
+      if (fired) return; fired = true;
+      panel.classList.add('hidden'); panel._closeSpring = null; cb && cb();
+    };
+    try {
+      panel._closeSpring = Spring.make({
+        x0: m.m42 || 0, target: panel.offsetHeight + 60, damping: 1.0, response: 0.28,
+        update: x => { panel.style.transform = `translateX(-50%) translateY(${x}px)`; },
+        done,
+      });
+    } catch (e) { done(); return; }
+    setTimeout(done, 320);
   },
 };
 
