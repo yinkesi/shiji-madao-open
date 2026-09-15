@@ -1084,6 +1084,8 @@ window.SJI = {
 document.addEventListener("DOMContentLoaded", () => {
   try { window.SJI_UI.boot(); } catch (e) { console.error("战斗层启动失败:", e); }
 });
+// 首次交互解锁战斗音效（浏览器手势策略）
+document.addEventListener("pointerdown", () => { window.SJI_AUDIO.unlock(); }, { once: true });
 window.SJI_DEBUG = {
   fast: false,
   skipScenes: false,

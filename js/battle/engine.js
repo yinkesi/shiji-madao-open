@@ -1153,11 +1153,11 @@ window.SJI_ENGINE = (function () {
     async _nextWave() {
       this.waveIndex++;
       if (this.mode === "survival") {
-        this.survivalWaveNo = this.waveIndex + 1;
-        this.pushLog("—— 第" + this.survivalWaveNo + "波将至，苔藓不尽…… ——");
-        // 选增益
+        // 选增益后再推进波次号（波次号在选完前不代表已入下一波）
         const boon = await window.SJI_UI.pickBoon(this);
         if (boon) this._applyBoon(this.player, boon);
+        this.survivalWaveNo = this.waveIndex + 1;
+        this.pushLog("—— 第" + this.survivalWaveNo + "波将至，苔藓不尽…… ——");
         this.heal(this.player, 3, "战间休整，");
         const ids = this._survivalWave(this.survivalWaveNo);
         const scale = 1 + 0.05 * (this.survivalWaveNo - 1);

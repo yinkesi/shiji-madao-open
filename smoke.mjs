@@ -6,7 +6,7 @@ import path from 'path';
 import fs from 'fs';
 
 const ROOT = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const HTML = path.join(ROOT, 'index.html');
+const HTML = path.join(ROOT, process.argv[2] || 'index.html');   // 可传打包后的单文件路径
 const OUT = path.join(ROOT, 'testshots');
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -234,7 +234,9 @@ await page.waitForTimeout(1600);
 check('生存开战', await page.evaluate(() => window.BATTLE_ACTIVE && window.SJI.battle.mode === 'survival'));
 for (let i = 0; i < 8; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(300); }
 // 打完第一波：杀敌 → 玩家阶段结束 → 波间增益点选 → 第二波
-for (let i = 0; i < 20; i++) {
+for (let i = 0; i < 25; i++) {
+  const boon = await page.$('#modal-box .boon-b');
+  if (boon) { await boon.click(); await page.waitForTimeout(450); }
   const st = await page.evaluate(() => {
     const b = window.SJI.battle;
     return { over: b.over, foes: b.living('enemy').length, phase: b._playerPhaseActive === true, wave: b.survivalWaveNo };
@@ -242,8 +244,6 @@ for (let i = 0; i < 20; i++) {
   if (st.over || st.wave >= 2) break;
   if (st.foes > 0) await page.evaluate(() => window.SJI_DEBUG.killEnemies());
   else if (st.phase) await page.keyboard.press('Space');
-  const boon = await page.$('#modal-box .boon-b');
-  if (boon) { await boon.click(); await page.waitForTimeout(400); }
   await page.waitForTimeout(650);
 }
 await page.waitForTimeout(1500);
@@ -252,6 +252,12 @@ check('生存进入第二波（增益已选）', wave2);
 await page.screenshot({ path: `${OUT}/m3-02-survival.png` });
 await page.evaluate(() => { window.SJI.battle.finish('lose'); });
 await page.waitForTimeout(2400);
+// 等战斗弹层（猜拳等）全部关闭，避免拦截结算按钮
+for (let i = 0; i < 12; i++) {
+  const off = await page.evaluate(() => !document.querySelector('#modal-mask').classList.contains('on'));
+  if (off) break;
+  await page.waitForTimeout(500);
+}
 await page.click('#r-menu');
 await page.waitForTimeout(700);
 check('生存后回校园', await page.evaluate(() => !window.BATTLE_ACTIVE && World.active));

@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""实验史记·春秋笔 —— 单文件打包
-把 index.html + css/style.css + js/*.js 内联成一个可直接双击运行的 HTML。
+"""实验史记·马刀行 —— 单文件打包
+把 index.html + css/style.css + js/*.js(含 js/data/*, js/battle/*) 内联成可直接双击运行的 HTML。
 用法: python build.py
 """
 import io, os, re
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC_HTML = os.path.join(ROOT, 'index.html')
-OUT = os.path.join(ROOT, '实验史记·春秋笔.html')
+OUT = os.path.join(ROOT, '实验史记·马刀行.html')
 
 SCRIPT_RE = re.compile(r'<script src="([^"]+)"></script>')
 CSS_RE = re.compile(r'<link rel="stylesheet" href="([^"]+)">')
