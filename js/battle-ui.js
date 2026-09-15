@@ -161,7 +161,7 @@ window.SJI_UI = (function () {
     $("#b-horse").disabled = p.hasHorse || phaseLocked() || p.apNow <= 0;
     $("#b-horse").textContent = p.hasHorse ? "已购马" : "购马·1动";
     $("#b-attack").disabled = phaseLocked() || !p.hasKnife || p.apNow <= 0 || p.st.seal > 0 || !battle.opponentsOf(p).some(f => E.adj(p, f));
-    $("#b-horseatk").disabled = phaseLocked() || !p.hasHorse || p.apNow <= 0 || !E.isWall(p.r, p.c) || !battle.opponentsOf(p).some(f => E.isWall(f.r, f.c) && E.manh(p, f) <= 3);
+    $("#b-horseatk").disabled = phaseLocked() || !p.hasHorse || p.apNow <= 0 || !E.isWall(p.r, p.c) || (battle.rule && battle.rule.id === "suomen") || !battle.opponentsOf(p).some(f => E.isWall(f.r, f.c) && E.manh(p, f) <= 3);
     $("#b-blood").disabled = phaseLocked() || p.apNow <= 0 || p.hp < 2;
     const undoN = (p._undo && p._undo.length) || 0;
     $("#b-undo").disabled = phaseLocked() || undoN === 0;

@@ -118,6 +118,7 @@ window.SJI_ENGINE = (function () {
       this._trackMinHp(p);
       this.roundDealt = 0;
       this.pushLog("—— 马刀场开。规则至简，而引人入胜。——");
+      if (this.rule) this.pushLog("【特则】" + this.rule.desc);
     }
 
     _place(u, rc) { u.r = rc[0]; u.c = rc[1]; u.rx = u.c; u.ry = u.r; }
@@ -418,6 +419,7 @@ window.SJI_ENGINE = (function () {
     }
 
     async doHorse(u, t) {
+      if (this.rule && this.rule.id === "suomen") { this.pushLog("禁闭室无墙可踢——马踢不可用。"); return false; }
       if (!u.hasHorse || u.apNow <= 0 || !t || !t.alive) return false;
       if (!isWall(u.r, u.c) || !isWall(t.r, t.c) || manh(u, t) > 3 + (u.boons.horseRange || 0)) return false;
       u.apNow--;
@@ -982,6 +984,32 @@ window.SJI_ENGINE = (function () {
         if (this.player._undo) this.player._undo.length = 0;
         for (const u of this.units) u._usedFirstStrike = false;
         await this._fireTriggers("roundStart");
+        // 剧情特则：看台飞瓶（运动会）——与敌人同行或同列者，被饮料瓶砸中
+        if (this.rule && this.rule.id === "cans" && !this.over) {
+          const lined = this.living("enemy").some(u => u.r === this.player.r || u.c === this.player.c);
+          if (lined) {
+            this.pushLog("—— 看台上飞来饮料瓶！——");
+            await this.rawHurt(this.player, 1, "被看台飞瓶砸中");
+            window.SJI_UI.fxFloat(this.player, "飞瓶！", "#c9b28a");
+          }
+        }
+        // 剧情特则：种树不绝（终焉）——崇国每回合自动种树
+        if (this.rule && this.rule.id === "zhongshu" && !this.over) {
+          const cg = this.living("enemy").find(u => u.charId === "chongguo");
+          if (cg) {
+            const live = this.units.filter(x => x.alive && x.charId === "tree" && x.side === "enemy").length;
+            if (live < CFG.RULES.TREE_CAP) {
+              const spot = DIRS.map(([dr, dc]) => [cg.r + dr, cg.c + dc]).find(([r, c]) => this.passable(r, c));
+              if (spot) {
+                const tr = makeUnit("tree", "enemy", this.units.length);
+                this._place(tr, spot);
+                this.units.push(tr);
+                window.SJI_UI.snap(tr);
+                this.pushLog("崇国种树一株！它看起来……快要死了。");
+              }
+            }
+          }
+        }
         ui.onState();
         if (this.round > CFG.RULES.MAX_ROUND) { this.finish("timeout"); break; }
         // 起义援军
@@ -1127,6 +1155,32 @@ window.SJI_ENGINE = (function () {
         u.roundDealt = 0;
       }
       this.roundDealt = 0;
+      // 剧情特则：验算（九省联考）——wonder 血量为偶数则回合末回复 1 血
+      if (this.rule && this.rule.id === "yansuan") {
+        const w = this.living("enemy").find(u => u.charId === "wonder");
+        if (w && w.hp > 0 && w.hp % 2 === 0 && w.hp < w.maxhp) this.heal(w, 1, "验算无误，");
+      }
+      // 剧情特则：争食（二楼巡征）——场上三份饭，回合结束站在饭上者食之
+      if (this.rule && this.rule.id === "zhengshi") {
+        if (!this._food) this._food = [[1, 3], [3, 3], [5, 3]];
+        this._food = this._food.filter(([r, c]) => {
+          const u = this.unitAt(r, c);
+          if (u) {
+            this.heal(u, 2, "抢得一时之食，");
+            this.pushLog("—— 那份饭，没了。——");
+            return false;
+          }
+          return true;
+        });
+      }
+      // 剧情特则：鲍鱼之肆（宿舍之夜）——相邻敌我互相腐蚀
+      if (this.rule && this.rule.id === "stench") {
+        for (const u of this.living()) {
+          for (const f of this.opponentsOf(u)) {
+            if (adj(u, f)) await this.rawHurt(f, 1, "近鲍鱼之肆而受蚀");
+          }
+        }
+      }
       ui_onState2();
       function ui_onState2() { window.SJI_UI.onState(); }
       // 断点续战：每回合末写一次快照（玩家可在标题页"继续上局"）

@@ -522,37 +522,43 @@ const Main = (() => {
     });
   }
 
-  /* ---------- 高难试炼：随剧情渐次解锁，首通授稀有刀卡 ---------- */
+  /* ---------- 高难试炼：随剧情渐次解锁，各有特则，首通授稀有刀卡 ---------- */
   const TRIALS = [
     { id: 't_yundonghui', name: '运动会 · 不怒自威', stars: 2,
       cond: '卷三后，且已胜绍铭', ok: () => G.ch >= 3 && Blades.hasCard('shaoming'),
       desc: '级部榜上前茅的绍铭：血厚一层，半血之下刀刀致命。',
-      cfg: { enemies: ['shaoming'], stage: { id: 's3b', hpScale: 1.3, blocked: [[1, 2], [1, 4], [5, 2], [5, 4]], terrain: 'cabinet' } },
+      cfg: { enemies: ['shaoming'], stage: { id: 's3b', hpScale: 1.3, blocked: [[1, 2], [1, 4], [5, 2], [5, 4]], terrain: 'cabinet' },
+             rule: { id: 'cans', desc: '看台飞瓶：与绍铭同行或同列，回合开始即被饮料瓶砸中 1 血——走位，别站在他的线上。' } },
       reward: 'b_firststrike' },
     { id: 't_sushe', name: '宿舍之夜 · 双臭临门', stars: 2,
       cond: '卷七后，且已胜头哥', ok: () => G.ch >= 7 && Blades.hasCard('touge'),
       desc: '头哥与神人同宿舍：溴味与臭袜齐飞，汝被锁在中间。',
-      cfg: { enemies: ['touge', 'shenren'], stage: { id: 's7b' } },
+      cfg: { enemies: ['touge', 'shenren'], stage: { id: 's7b' },
+             rule: { id: 'stench', desc: '鲍鱼之肆：回合结束，所有相邻的敌我互相腐蚀，各损 1 血——贴身即换血，远程为王。' } },
       reward: 'b_shield' },
     { id: 't_liankao', name: '九省联考 · 牛刀小试', stars: 3,
       cond: '卷九后，已胜 wonder，且见证过「马刀神的试炼」', ok: () => G.ch >= 9 && Blades.hasCard('wonder') && G.flags.wonderTrial,
       desc: 'wonder 以牛顿定理破第十八题——你就是那道题。血厚五成，强制困难。',
-      cfg: { enemies: ['wonder'], diff: 'hard', stage: { id: 's5b', hpScale: 1.5, blocked: [[3, 1], [3, 5]], terrain: 'table' } },
+      cfg: { enemies: ['wonder'], diff: 'hard', stage: { id: 's5b', hpScale: 1.5, blocked: [[3, 1], [3, 5]], terrain: 'table' },
+             rule: { id: 'yansuan', desc: '验算：回合结束，wonder 血量为偶数则回复 1 血——算好伤害，把他打成奇数。' } },
       reward: 'b_bloodfree' },
     { id: 't_jinbi', name: '禁闭室 · 疯法同囚', stars: 3,
       cond: '卷十二后，且已胜李帆', ok: () => G.ch >= 12 && Blades.hasCard('lifan'),
       desc: '禁闭室狭小，李疯购刀免动，主任当场抓获——同囚即死斗。',
-      cfg: { enemies: ['lifan', 'qinfa'], stage: { id: 's12b', blocked: [[3, 3]], terrain: 'cabinet' } },
+      cfg: { enemies: ['lifan', 'qinfa'], stage: { id: 's12b', blocked: [[3, 3]], terrain: 'cabinet' },
+             rule: { id: 'suomen', desc: '锁门：禁闭室无墙可踢，双方马踢不可用——纯刀技的近身缠斗。' } },
       reward: 'b_killheal' },
     { id: 't_xunzheng', name: '二楼巡征 · 羚羊', stars: 3,
       cond: '卷十三后，且已胜李默', ok: () => G.ch >= 13 && Blades.hasCard('limo'),
       desc: '巡征的李默步幅极大、争食自愈，且已磨刀霍霍（血厚四成）。',
-      cfg: { enemies: ['limo'], stage: { id: 's13b', hpScale: 1.4 } },
+      cfg: { enemies: ['limo'], stage: { id: 's13b', hpScale: 1.4 },
+             rule: { id: 'zhengshi', desc: '争食：场上三份饭，回合结束站在饭上者回复 2 血，每份一次——抢饭，或断他饭路。' } },
       reward: 'b_cleave' },
     { id: 't_zhongyan', name: '终焉 · 本纪重演', stars: 4,
       cond: '已在成传之战胜过校长', ok: () => Blades.hasCard('chongguo'),
-      desc: '再入校长室：崇国弃车保帅、种树不绝，钦法环伺——强制困难。',
-      cfg: { enemies: ['qinfa', 'chongguo'], allies: ['weibing'], diff: 'hard', stage: { id: 's14', blocked: [[2, 3], [4, 3]], terrain: 'cabinet' } },
+      desc: '再入校长室：崇国弃车保帅、钦法环伺——强制困难。',
+      cfg: { enemies: ['qinfa', 'chongguo'], allies: ['weibing'], diff: 'hard', stage: { id: 's14', blocked: [[2, 3], [4, 3]], terrain: 'cabinet' },
+             rule: { id: 'zhongshu', desc: '种树不绝：每回合开始，崇国自动种树一株（至多三株）——树木堵路，亦是你的回血口粮。' } },
       reward: 'b_horsereach' },
   ];
 
@@ -581,10 +587,12 @@ const Main = (() => {
         const done = !!G.trialDone[t.id];
         const open = t.ok();
         const rw = Blades.RARE_BOONS[t.reward];
+        const rule = t.cfg.rule;
         const c = el('div', 'card');
         c.style.cssText = 'display:flex;align-items:center;gap:12px;opacity:' + (open ? 1 : 0.55);
         c.innerHTML = `<div style="flex:1;min-width:0"><h3 style="margin:0">${t.name} <span class="pill gold">${'★'.repeat(t.stars)}</span>${done ? '<span class="pill jade">已首通</span>' : open ? '<span class="pill">可挑战</span>' : '<span class="pill gray">未解锁</span>'}</h3>
           <div class="meta">${t.desc}</div>
+          ${rule ? `<div class="meta" style="color:var(--cinnabar)"><b>〔特则〕</b>${rule.desc}</div>` : ''}
           <div class="meta">解锁：${t.cond}　·　首通赏：稀有刀卡「${rw.name}」——${rw.desc}</div></div>`;
         const b = el('button', 'btn' + (open ? ' btn-primary' : ''), done ? '再战' : open ? '挑战' : '未解锁');
         b.style.padding = '8px 14px';
