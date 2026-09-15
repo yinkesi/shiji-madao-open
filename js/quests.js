@@ -54,7 +54,7 @@ const Quests = (() => {
     { id: 'm2', name: '实验三异能者', where: 'corridor', pos: [720, 260],
       goal: '连战大哥、神人、仙女三人', hint: '三阵连战，阵间回血；异能者各有异能',
       need: () => Q.done('m1'),
-      cfg: { enemies: ['dage'], waves: [['dage'], ['shenren'], ['xiannv']], rule: { id: 'dyad', desc: '相邻敌人伤害+1（二声部合唱）' } },
+      cfg: { enemies: ['dage'], waves: [['dage'], ['shenren'], ['xiannv']], restFull: true, hpScale: 0.75, rule: { id: 'dyad', desc: '相邻敌人伤害+1（二声部合唱）' } },
       reward: { money: 12, rep: 3 },
       pre: [
         { who: '旁白', text: '走廊尽头，三个人站成一排。这是全校唯一一个会「合唱」的阵型。' },
@@ -83,7 +83,8 @@ const Quests = (() => {
     { id: 'm3', name: '操场三国刀', where: 'playground', pos: [520, 560],
       goal: '胜小川与鲁豪，夺三国刀之名', hint: '小川缴械、鲁豪刀伤翻倍——先破其一',
       need: () => Q.done('m2'),
-      cfg: { enemies: ['xiaochuan', 'luhao'], rule: { id: 'dyad', desc: '相邻敌人伤害+1（三国刀同气连枝）' } },
+      cfg: { enemies: ['xiaochuan'], waves: [['xiaochuan'], ['luhao']], restFull: true, hpScale: 0.65,
+             rule: { id: 'chaos', desc: '三国相争：敌人各有二成机率打错人（同门相争，各怀鬼胎）' } },
       reward: { money: 15, rep: 3 },
       pre: [
         { who: '旁白', text: '操场北侧。两个人把刀插在土里，像插着两面旗。' },
@@ -110,7 +111,7 @@ const Quests = (() => {
     { id: 'm4', name: '世界马刀协会', where: 'playground', pos: [950, 300],
       goal: '协会锦标赛三连胜：鲁豪→小川→子琛', hint: '阵间充分休整；子琛会召唤援军',
       need: () => Q.done('m3'),
-      cfg: { enemies: ['luhao'], waves: [['luhao'], ['xiaochuan'], ['zichen']], restFull: true, hpScale: 0.68,
+      cfg: { enemies: ['luhao'], waves: [['luhao'], ['xiaochuan'], ['zichen']], restFull: true, hpScale: 0.45,
              rule: { id: 'uprising', desc: '第三回合敌人援军二人入场（起义）' } },
       reward: { money: 25, rep: 5, rare: 'b_killheal' },
       pre: [
@@ -143,7 +144,7 @@ const Quests = (() => {
     { id: 'm5', name: '七班刀合流', where: 'classroom7', pos: [540, 430],
       goal: '胜李帆与头哥，六七合流', hint: '李帆购刀免动、笑场之歌能惑人；头哥免疫击退',
       need: () => Q.done('m4'),
-      cfg: { enemies: ['lifan', 'touge'], rule: { id: 'stench', desc: '鲍鱼之肆：回合结束相邻敌我互蚀各 1 血' } },
+      cfg: { enemies: ['lifan', 'touge'], hpScale: 0.85, rule: { id: 'stench', desc: '鲍鱼之肆：回合结束相邻敌我互蚀各 1 血' } },
       reward: { money: 18, rep: 4 },
       pre: [
         { who: '旁白', text: '七班教室。灯管频闪，像有人在蹦迪。' },
@@ -174,7 +175,7 @@ const Quests = (() => {
     { id: 'm6', name: '刀禁令风波', where: 'office', pos: [240, 500],
       goal: '主任钦法坐镇办公楼，闯过去', hint: '钦法当场缴械；此战特则：楼内无墙可踢',
       need: () => Q.done('m5'),
-      cfg: { enemies: ['qinfa', 'weibing'], rule: { id: 'suomen', desc: '锁门：楼内无墙可踢，双方马踢不可用' } },
+      cfg: { enemies: ['qinfa', 'weibing'], hpScale: 0.9, rule: { id: 'suomen', desc: '锁门：楼内无墙可踢，双方马踢不可用' } },
       reward: { money: 20, rep: 4, unlock: 'qinfa' },
       pre: [
         { who: '旁白', text: '办公楼二层。门关着，窗也关着。走廊里没有任何声音。' },
@@ -740,3 +741,4 @@ const Quests = (() => {
   };
   return Q;
 })();
+window.Quests = Quests;   // 显式挂载：Node 测试（mainquest_winrate 等）与跨脚本判活皆可直读任务配置

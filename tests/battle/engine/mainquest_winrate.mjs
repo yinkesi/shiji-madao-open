@@ -7,25 +7,25 @@
  * 用法：node tests/battle/engine/mainquest_winrate.mjs [每格场次，默认 24]
  */
 import { loadEngine } from '../helpers/engine_env.mjs';
+import { createRequire } from 'module';
 import { bots } from '../helpers/bot.mjs';
 
 const N = Number(process.argv[2] || 24);
 const { E, D, ui } = loadEngine({ ui: { rpsRound: async () => ({ res: 'win', ap: 3 }) } });
-const { greedyBot } = bots(E);
-ui.playerPhase = greedyBot;
+const { greedyBot, kiteBot } = bots(E);
+ui.playerPhase = kiteBot;   // 会拉扯的玩家模型：贴身换血流（greedy）对鲁豪类天生 0 分，无法代表人类
 
-/* 主线各节（与 js/quests.js MAIN 对齐：敌人 / 波次 / hpScale / 强制难度） */
-const MAIN = [
-  { id: 'm1', name: '初执马刀', enemies: ['wanzhen'], rule: null, hpScale: 1.0, diff: null },
-  { id: 'm2', name: '实验三异能者', enemies: ['dage'], waves: [['dage'], ['shenren'], ['xiannv']], rule: 'dyad', hpScale: 1.0, diff: null },
-  { id: 'm3', name: '操场三国刀', enemies: ['xiaochuan', 'luhao'], rule: 'dyad', hpScale: 1.0, diff: null },
-  { id: 'm4', name: '世界马刀协会', enemies: ['luhao'], waves: [['luhao'], ['xiaochuan'], ['zichen']], rule: 'uprising', hpScale: 0.68, diff: null, restFull: true },
-  { id: 'm5', name: '七班刀合流', enemies: ['lifan', 'touge'], rule: 'stench', hpScale: 1.0, diff: null },
-  { id: 'm6', name: '刀禁令风波', enemies: ['qinfa', 'weibing'], rule: 'suomen', hpScale: 1.0, diff: null },
-  { id: 'm7', name: '马刀之神', enemies: ['wonder'], rule: 'yansuan', hpScale: 1.4, diff: null },
-  { id: 'm8', name: '终焉之战', enemies: ['qinfa', 'chongguo'], allies: ['weibing'], rule: 'zhongshu', hpScale: 0.78, diff: 'hard' },
-  { id: 'm9', name: '马刀的结局', enemies: ['wonder'], rule: 'cans', hpScale: 1.6, diff: 'hard' },
-];
+/* 主线各节：直接读 js/quests.js 的真配置（单一数据源，requests.js 顶层挂了 window.Quests）。
+   hpScale/restFull 在任务数据里写顶层、由 Quests.start 归位进 cfg.stage——此处同样归位。 */
+createRequire(import.meta.url)('../../../js/quests.js');
+const MAIN = window.Quests.mainList().map(q => ({
+  id: q.id, name: q.name,
+  enemies: q.cfg.enemies, waves: q.cfg.waves, allies: q.cfg.allies || [],
+  rule: q.cfg.rule || null,
+  hpScale: q.cfg.hpScale !== undefined ? q.cfg.hpScale : 1.0,
+  restFull: !!q.cfg.restFull,
+  diff: q.cfg.diff || null,
+}));
 
 /* 玩家档位：到该节时大致具备的加成（血上限额外 / 额外行动点 / 已持稀有卡 / 已录之技） */
 const PROFILES = {
@@ -117,5 +117,5 @@ for (const r of rows) {
     ...DIFFS.map((d, i) => pad(r.rates[d] + '%', width[3 + i])),
   ].join(''));
 }
-console.log('\n（每格 ' + N + ' 场，greedyBot 玩家，猜拳胜/和/负 = 40/35/25；「强制」列非空表示该节锁定难度，不随玩家设置）');
+console.log('\n（每格 ' + N + ' 场，kiteBot 玩家——会拉扯/优先残血，更接近人类；猜拳胜/和/负 = 40/35/25；「强制」列非空表示该节锁定难度，不随玩家设置）');
 process.exit(0);

@@ -170,7 +170,8 @@ const Blades = (() => {
         name: eqId ? '刀谱 · ' + rankName() : '白板 · ' + rankName(),
         desc: `胜${wins()}场：血上限+${hpBonus()}，每回合行动点+${apBonus()}。`
           + (upDesc ? `修炼：${upDesc}。` : '')
-          + (eqId ? `技出「${window.SJI_DATA.CHARACTERS[eqId].hao}」所授。` : '白板无技——去赢一场，录他一技。'),
+          + (eqId ? `技与被动承「${window.SJI_DATA.CHARACTERS[eqId].hao}」——其被动机制对汝生效。`
+                 : '白板无技——去赢一场，录他一技（连被动一并承之）。'),
       },
       skill: sk,
       quote: '规则至简，而引人入胜。',
@@ -184,6 +185,8 @@ const Blades = (() => {
   function applyBoons(battle) {
     const asLead = !battle.player.charId || battle.player.charId === 'yinkesi';
     if (asLead) {
+      /* 获得角色 = 获得其全部技能：装备谁的卡，其被动机制即对音克思生效（引擎 passiveOwner） */
+      battle.player._learnedFrom = equippedSkillId() || null;
       const n = apBonus();
       for (let i = 0; i < n; i++) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === 'b_ap'));
       for (const id of Object.keys(UPGRADE_BOON)) {
