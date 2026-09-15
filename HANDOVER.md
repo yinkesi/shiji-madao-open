@@ -75,6 +75,14 @@
 | 4 | 老档迁移只过了 quest_flow 的合成旧档测试 | 建议拿一个真实玩出来的旧档（`shiji_cqb_v1`）再人工过一遍。 |
 | 5 | 「进操场大 bug」未单独复现 | 修完落点/命中区后未再复现，建议用户实测确认；若仍在，先抓 `#dialog`/`#chapter-card`/`#modal-mask` 是否残留遮挡。 |
 
+## 5.5 推送注意事项（重要）
+
+- 第四棒末尾因代理断连，最后一次同步走了 **GitHub API 快照推送**（push_via_api.py）：
+  远端 main = `716dc92`（API 生成的快照提交，内容=本地 7e2efe7 的全量文件），本地与远端 **SHA 分叉但内容一致**。
+- 代理恢复后请执行：`git pull --rebase origin main`（本地两枚提交会因树相同被跳过/合并），
+  或直接 `git push --force-with-lease origin main`（单人仓库，内容一致，安全）。
+- 之后的正常推送不再需要 force。
+
 ## 6. 接手自检（第一小时）
 
 ```bash
