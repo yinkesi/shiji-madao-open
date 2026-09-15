@@ -57,7 +57,8 @@ function applyRares(b, rares, ap) {
     const boon = D.BOONS.find(x => x.id === 'b_ap');
     if (boon) b._applyBoon(b.player, boon);
   }
-  rares.forEach(id => {
+  /* 稀有刀卡每场只能携带一张：模型只带档案中的第一张 */
+  rares.slice(0, 1).forEach(id => {
     const boon = D.BOONS.find(x => x.id === id);
     if (boon) b._applyBoon(b.player, boon);
   });

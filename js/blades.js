@@ -151,6 +151,50 @@ const Blades = (() => {
     return false;
   }
 
+  /* 稀有刀卡每场只能携带一张：selectedRare 返回当前携带者（缺省取第一张） */
+  function selectedRare() {
+    const list = rareList();
+    if (!list.length) return null;
+    const cur = G.blades.rareEquip;
+    if (cur && list.includes(cur)) return cur;
+    G.blades.rareEquip = list[0];
+    return list[0];
+  }
+  /* 战斗中切换携带：旧卡效果移除、新卡生效（增益字段一一逆操作） */
+  function _removeBoonFx(u, id) {
+    const b = u.boons;
+    switch (id) {
+      case 'b_hp': u.maxhp = Math.max(1, u.maxhp - 2); u.hp = Math.min(u.hp, u.maxhp); break;
+      case 'b_knife': b.knife = Math.max(0, (b.knife || 0) - 1); break;
+      case 'b_horse': b.horse = Math.max(0, (b.horse || 0) - 1); break;
+      case 'b_regen': b.regen = Math.max(0, (b.regen || 0) - 1); break;
+      case 'b_dodge': b.dodge = Math.max(0, +((b.dodge || 0) - 0.15).toFixed(2)); break;
+      case 'b_blood': b.blood2 = false; break;
+      case 'b_cd': b.cdReduce = Math.max(0, (b.cdReduce || 0) - 1); break;
+      case 'b_move': b.move = Math.max(0, (b.move || 0) - 1); break;
+      case 'b_ap': b.apBonus = Math.max(0, (b.apBonus || 0) - 1); break;
+      case 'b_bloodfree': b.bloodFree = false; break;
+      case 'b_cleave': b.cleave = 0; break;
+      case 'b_horsereach': b.horseRange = Math.max(0, (b.horseRange || 0) - 1); break;
+      case 'b_killheal': b.killHeal = 0; break;
+      case 'b_shield': b.shield = Math.max(0, (b.shield || 0) - 3); u.st.shield = Math.max(0, u.st.shield - 3); break;
+      case 'b_firststrike': b.firstStrike = Math.max(0, (b.firstStrike || 0) - 1); break;
+    }
+  }
+  function switchRare(battle, boonId) {
+    if (!RARE_BOONS[boonId] || !rareList().includes(boonId)) return false;
+    const cur = selectedRare();
+    if (battle && cur && cur !== boonId && !battle.over) _removeBoonFx(battle.player, cur);
+    G.blades.rareEquip = boonId;
+    if (battle) {
+      const boon = window.SJI_DATA.BOONS.find(b => b.id === boonId);
+      if (boon) battle._applyBoon(battle.player, boon);
+      battle.pushLog("更换携带刀卡：「" + RARE_BOONS[boonId].name + "」。（每场仅可携带一张）");
+    }
+    if (typeof Save !== 'undefined') Save.write();
+    return true;
+  }
+
   function cards() { return (G.blades && G.blades.cards) || []; }
   function hasCard(id) { return cards().includes(id); }
 
@@ -234,8 +278,10 @@ const Blades = (() => {
         if ((upgrades()[id] || 0) > 0) battle._applyBoon(battle.player, window.SJI_DATA.BOONS.find(b => b.id === UPGRADE_BOON[id]));
       }
     }
-    for (const bid of rareList()) {
-      const boon = window.SJI_DATA.BOONS.find(b => b.id === bid);
+    /* 稀有刀卡：每场只能携带一张（左上角可切换） */
+    const carried = selectedRare();
+    if (carried) {
+      const boon = window.SJI_DATA.BOONS.find(b => b.id === carried);
       if (boon) battle._applyBoon(battle.player, boon);
     }
     const itemId = (window.G && G.flags && G.flags.duelItem) || null;
@@ -250,8 +296,11 @@ const Blades = (() => {
   return { registerChar, grant, equip, cards, hasCard, skillCardOf, equippedSkillId,
            rankName, nextRank, hpBonus, apBonus, applyBoons, buyUpgrade, grantRare,
            innates, grantInnate, INNATE_INFO,
+           selectedRare, switchRare,
            upgrades, rareList, UPGRADES, RARE_BOONS, BATTLE_ITEMS, BLADE_RANKS };
 })();
 
 /* 载入即注册音克思战斗卡（G 未建时按 0 胜计；开战时 Blades.registerChar 会按最新胜场重算） */
 try { Blades.registerChar(); } catch (e) {}
+/* 显式挂载：const 不自动挂 window——跨脚本判活与 Node 测试直读皆依赖此行 */
+window.Blades = Blades;

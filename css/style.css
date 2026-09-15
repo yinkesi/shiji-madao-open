@@ -525,6 +525,16 @@ body.theme-night #battle { background: radial-gradient(1100px 560px at 78% -12%,
 .actbar .btn { font-size: 14px; padding: 9px 15px; border-radius: 12px; }
 #battle .btn.armed, .actbar .btn.armed { outline: 3px solid var(--cinnabar); outline-offset: -1px; background: #ffe9c9; }
 
+#rare-chips { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+#rare-chips .rare-chips-label { font-size: 11px; font-weight: 800; letter-spacing: .18em; color: var(--gold); }
+#rare-chips .rare-chip {
+  appearance: none; cursor: pointer; border-radius: 999px; padding: 4px 11px;
+  font-size: 12px; font-weight: 700; border: 1px solid rgba(168,132,44,.5);
+  background: rgba(168,132,44,.08); color: var(--ink-2); transition: transform 120ms ease-out;
+}
+#rare-chips .rare-chip:active { transform: scale(0.94); }
+#rare-chips .rare-chip.on { background: linear-gradient(180deg,#b8912f,#8a6a1a); color: #fff8f2; border-color: transparent; }
+
 #enemy-panel, #log-panel {
   background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
   border: 1px solid var(--glass-border); border-radius: 16px; padding: 10px 12px; box-shadow: var(--shadow-1);

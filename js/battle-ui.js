@@ -182,6 +182,7 @@ window.SJI_UI = (function () {
       elist.appendChild(row);
     });
     $("#round-no").textContent = "第 " + battle.round + " 回合" + (battle.mode === "survival" ? " · 第" + battle.survivalWaveNo + "波" : "");
+    renderRareChips();
     if ($("#ai-label")) {
       const nm = CFG.AI_LABEL || {};
       const dn = { easy: "简单", normal: "普通", hard: "困难", extreme: "极难", nightmare: "噩梦" };
@@ -189,6 +190,28 @@ window.SJI_UI = (function () {
       const aiTxt = (battle.diff === "nightmare") ? "最优(强制)" : ((battle.diff === "extreme") ? "狂攻(强制)" : (nm[battle.aiAggr] || "主动"));
       $("#ai-label").textContent = diffTxt + " · AI " + aiTxt;
     }
+  }
+
+  /* 稀有刀卡携带选择器（战场左上角）：每场只能携带一张，点选即时切换 */
+  function renderRareChips() {
+    const box = document.getElementById("rare-chips");
+    if (!box) return;
+    const owned = (window.Blades && Blades.rareList()) || [];
+    if (!owned.length) { box.innerHTML = ""; return; }
+    const carried = Blades.selectedRare();
+    box.innerHTML = '<span class="rare-chips-label">携带</span>' + owned.map(id => {
+      const r = Blades.RARE_BOONS[id];
+      if (!r) return "";
+      return `<button class="rare-chip ${id === carried ? "on" : ""}" data-rare="${id}" title="${r.desc}">${r.name}</button>`;
+    }).join("");
+    box.querySelectorAll(".rare-chip").forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        if (battle && !battle.over) Blades.switchRare(battle, btn.dataset.rare);
+        else Blades.switchRare(null, btn.dataset.rare);
+        toast("携带刀卡切换为「" + Blades.RARE_BOONS[btn.dataset.rare].name + "」", "谱");
+      };
+    });
   }
 
   function phaseLocked() { return !battle || battle.over || battle._playerPhaseActive !== true; }

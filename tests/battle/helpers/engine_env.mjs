@@ -18,6 +18,13 @@ const require = createRequire(import.meta.url);
  */
 export function loadEngine(opts = {}) {
   global.window = {};
+  /* G 桥：游戏脚本大量使用裸名 G（浏览器中即 window.G）。
+     Node 里 window 与 globalThis 不同源，这里用访问器把裸名 G 桥接到 window.G。 */
+  Object.defineProperty(globalThis, 'G', {
+    configurable: true,
+    get() { return global.window ? global.window.G : undefined; },
+    set(v) { if (global.window) global.window.G = v; },
+  });
   const bumps = [];
   window.SJI_SAVE = Object.assign({
     bump: (k, n) => bumps.push([k, n]),
