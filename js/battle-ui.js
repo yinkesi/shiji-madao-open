@@ -272,18 +272,17 @@ window.SJI_UI = (function () {
     if (!box) return;
     const owned = (window.Blades && Blades.rareList()) || [];
     if (!owned.length) { box.innerHTML = ""; return; }
-    const carried = Blades.selectedRare();
-    box.innerHTML = '<span class="rare-chips-label">携带</span>' + owned.map(id => {
+    box.innerHTML = '<span class="rare-chips-label">生效中</span>' + owned.map(id => {
       const r = Blades.RARE_BOONS[id];
       if (!r) return "";
-      return `<button class="rare-chip ${id === carried ? "on" : ""}" data-rare="${id}" title="${r.desc}">${r.name}</button>`;
+      const on = Blades.isRareOn(id);
+      return `<button class="rare-chip ${on ? "on" : ""}" data-rare="${id}" title="${r.desc}（点选开/关）">${r.name}</button>`;
     }).join("");
     box.querySelectorAll(".rare-chip").forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();
-        if (battle && !battle.over) Blades.switchRare(battle, btn.dataset.rare);
-        else Blades.switchRare(null, btn.dataset.rare);
-        toast("携带刀卡切换为「" + Blades.RARE_BOONS[btn.dataset.rare].name + "」", "谱");
+        if (battle && !battle.over) Blades.toggleRare(battle, btn.dataset.rare);
+        toast(Blades.isRareOn(btn.dataset.rare) ? "启用「" + Blades.RARE_BOONS[btn.dataset.rare].name + "」" : "收回「" + Blades.RARE_BOONS[btn.dataset.rare].name + "」", "谱");
       };
     });
   }
