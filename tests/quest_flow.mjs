@@ -1,6 +1,23 @@
 /* 剧情链路测试：验证剧情重构基础链路
    （择难度 → 开局即主线 → 赏格随难度 → 章节映射链 → 歇一日 → 立传解耦 → 支线解锁 → 点将出征 → 任务点错位）
    用法：NODE_PATH=<装有 playwright 的 node_modules> node tests/quest_flow.mjs */
+// ================================================================
+// 【这个文件是干嘛的】
+// 剧情链路测试：把剧情系统的关键链路从头到尾走一遍。它和
+// smoke.mjs 一样用 Playwright 遥控真浏览器（Playwright 是什么、
+// page.evaluate 怎么用，见 smoke.mjs 文件头，此处不重复），区别
+// 在于专测"剧情与任务"这条线，战斗只用"天降正义"作弊速通。
+// 覆盖的链路（按测试段落顺序）：
+//   择难度 → 开局即主线 → 赏格随难度 → 章节随主线推进 → 歇一日
+//   → 立传解耦 → 任务点错位 → 支线解锁 → 点将出征 → 剧情文本
+//   齐备 → 战前/战后对话真实播放 → 老档迁移
+//
+// 【新手阅读提示】
+// 1) 大量断言直接读 JS 全局（G、Quests、Writing、Blades…）：
+//    page.evaluate 就是在网页里跑代码，游戏内部状态一览无余。
+// 2) 等动画/回调一律用 waitFor 轮询页面状态，不用固定 sleep 硬等
+//    （动画时长是魔数，睡 700ms 时好时坏）。
+// ================================================================
 import { chromium } from 'playwright';
 import { pathToFileURL } from 'url';
 import path from 'path';
@@ -8,6 +25,10 @@ import path from 'path';
 const ROOT = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const HTML = path.join(ROOT, '..', 'index.html');
 
+// ---------- 测试环境搭建 ----------
+// 与 smoke.mjs 同款：无头 Chrome + 1280x800 视口 + 报错监听 +
+// 自制断言器 check。ROOT 定位在 tests/ 目录，页面取上一级的
+// index.html（本测试只跑源码版）。
 const errors = [];
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -44,6 +65,9 @@ const clearDialog = async (max = 40, tag = '') => {
   return false;
 };
 
+// 先清一次 localStorage 再刷新：保证从"零存档"的干净状态开测
+// （上一次运行留下的进度会污染断言）。顺带打开 autoRps 调试开关，
+// 让战斗里的猜拳自动出、不卡弹层。
 await page.goto(pathToFileURL(HTML).href);
 await page.waitForTimeout(800);
 await page.evaluate(() => localStorage.clear());
@@ -53,6 +77,8 @@ await page.waitForTimeout(800);
 await page.evaluate(() => { window.SJI_DEBUG.autoRps = true; });
 
 // ===== 1. 开局难度入口 =====
+// 点「开卷」应先弹难度面板、五档齐列；脚本选「极难」（第 4 档），
+// 难度应写进战斗层设置（lastDiff=extreme）并正常进入世界。
 await page.click('#btn-new');
 await page.waitForTimeout(600);
 const panelTitle = await page.evaluate(() => document.querySelector('#panel-title').textContent);
@@ -72,6 +98,9 @@ check('难度写入战斗层设置', diffApplied === 'extreme', 'lastDiff=' + di
 check('进入世界', await page.evaluate(() => World.active && !window.BATTLE_ACTIVE));
 
 // ===== 2. 开局即主线：任务卡 + 令标记 =====
+// 新档不该"开局没事做"：任务卡应直接挂着主线首节「初执马刀」、
+// 带 0/9 进度，HUD 同步；世界上画出 m1 的「令」标记，出生地在
+// 主线所在的操场。
 const qc = await page.evaluate(() => document.querySelector('#questcard').textContent);
 check('任务卡显示主线首节「初执马刀」', qc.includes('初执马刀'), qc.replace(/\s+/g, ' ').slice(0, 60));
 check('任务卡带主线进度', qc.includes('0/9'), qc.slice(0, 30));
@@ -82,6 +111,8 @@ check('世界存在「令」标记', mk.some(m => m.main && m.q === undefined &&
 check('开局落在操场（主线首节所在地）', await page.evaluate(() => World.sceneId === 'playground'));
 
 // ===== 3. 难度影响赏格：直接结算 m1 =====
+// 不真打：直接调 Quests.complete(m1) 结算。极难档赏格 ×1.6
+// （8→13）应生效，主线自动推进到 m2，章节 ch 0→1。
 const reward = await page.evaluate(() => {
   const before = G.money;
   const q = Quests.byId('m1');
@@ -93,6 +124,9 @@ check('极难赏格 ×1.6 生效（8 → 13）', reward.gain === 13, 'money +' +
 check('章节随主线推进（m1 → ch1）', reward.ch === 1, 'ch=' + reward.ch);
 
 // ===== 4. 章节推进链（m4 后协会开张，m9 后终章） =====
+// 连续 complete 掉 m2~m9，验证"任务节 → 章节数"的映射链：
+// m4 后协会开张、m6 进入刀禁期（ch≥12）、m9 收卷进终章（ch16）；
+// 主线全成后进度 9/9，任务卡转为收卷态并提供终章入口。
 const chain = await page.evaluate(() => {
   const out = [];
   ['m2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9'].forEach(id => {
@@ -112,6 +146,9 @@ check('主线全成：进度 9/9 且卡片转为收卷态', done.label === '9/9'
 check('收卷态提供终章入口', done.card.includes('终章'), done.card.replace(/\s+/g, ' ').slice(0, 50));
 
 // ===== 5. 歇一日 =====
+// 底部地点条末尾应常驻「歇一日」按钮（而非旧的「下一时段」）；
+// 点开后把过场对话走完（有选项就选第一项"早些睡"），日子应推进，
+// HUD 日期位改显章节名而非"早读/午休"这类时段。
 const rest = await page.evaluate(async () => {
   const d0 = G.day, m0 = G.money;
   const btn = [...document.querySelectorAll('#placelist .place-btn')].find(b => b.textContent.includes('歇一日'));
@@ -135,6 +172,8 @@ check('歇一日推进日子', dayAfter.day >= 2, JSON.stringify(dayAfter));
 check('HUD 显示章节名而非时段', !/早读|晚自习|午休/.test(dayAfter.ch), dayAfter.ch);
 
 // ===== 6. 立传已解耦（未胜传主也能开撰史） =====
+// duelReady 恒为真（门禁已撤）；duelWon 只如实反映"胜没胜过传主"，
+// 供界面做软提示，不再拦人。
 const writ = await page.evaluate(() => {
   const ready = Writing.duelReady(1);
   const won = Writing.duelWon(1);
@@ -144,6 +183,10 @@ check('立传门禁已撤下（duelReady 恒真）', writ.ready === true);
 check('未胜传主时 duelWon 为假（仅作软提示）', writ.won === writ.hasDage, JSON.stringify(writ));
 
 // ===== 7. 任务点重叠错位（造出 m1 与 s_win30 同在操场 750,450 的局面） =====
+// 两个任务恰好落同一点会让玩家点谁全凭运气：系统应把重叠标记
+// 自动"摊开"（同场景两点相距 >40px），且站在各自点位下方能分别
+// 命中、互不遮蔽。测试先备份 G.quests、伪造条件（wins=40 满足
+// s_win30 的解锁条件），验完原样还原，不污染后续段落。
 const spread = await page.evaluate(() => {
   const keep = Object.assign({}, G.quests);
   G.quests = {};           // 主线回到首节 m1（操场 750,450）
@@ -166,6 +209,8 @@ check('两个任务点各自可被单独命中（互不遮蔽）',
   spread.hit.join(' / '));
 
 // ===== 8. 立传解耦的端到端：未胜传主也能真正打开撰史面板 =====
+// 摘掉大哥的卡确保"未胜传主"，伪造四枚卷一碎片把卷凑齐，再调
+// Writing.open(1)：撰史面板应能真正打开（标题含"撰史"）。
 const writOpen = await page.evaluate(() => {
   // 卷一传主是 dage；确保没胜过他
   G.blades.cards = (G.blades.cards || []).filter(c => c !== 'dage');
@@ -185,6 +230,10 @@ await page.evaluate(() => UI.closePanel());
 await page.waitForTimeout(400);
 
 // ===== 9. 支线解锁 → 强力人物入册 → 点将出征 =====
+// 给大哥刷好感（addFavorQuiet 40，过 s_dage 的"好感≥20"门槛），
+// 再按真实流程刷新任务面板：支线应出现在可接列表、世界画出
+// 「刀」标记、任务卡列出"支线可接"；complete 后大哥入册（可被
+// 点将），结算文案点明「强力人物解锁」。
 const sideShow = await page.evaluate(() => {
   G.ch = 1;
   Engine.addFavorQuiet('dage', 40);      // 满足 s_dage 的 cond（好感≥20）
@@ -206,6 +255,11 @@ check('完成支线后强力人物入册', unlock.after.includes('dage') && !unl
 check('结算文案点明「强力人物解锁」', unlock.hasText === true);
 
 // ===== 10. 剧情文本：每节都必须有专属的战前/战胜/战败/挑衅台词 =====
+// 内容体检三连：主线+支线每一节都须备齐 pre/post/postLose/foe
+// 台词；剧情总字量须超过 4000 字（防止缩水回通用句）；通用兜底
+// 台词一个都不许漏进任何一节。随后是"奖励可发放性"体检：任务
+// 里写的稀有刀卡/解锁人物必须真实存在——曾出过奖励写了 rare
+// 却无对应条目、打通了也拿不到还不报错的坑。
 const story = await page.evaluate(() => {
   const miss = [];
   let chars = 0;
@@ -242,6 +296,10 @@ const rareOk = await page.evaluate(() => {
 check('所有任务的稀有刀卡/解锁人物都能真正兑现', rareOk.length === 0, rareOk.join(', ') || '齐');
 
 // ===== 11. 战前/战后对话真的会播（走真实链路：走近 → 战前 → 点将 → 开战 → 回世界 → 战后） =====
+// 不走捷径，完整打一遍支线 s_luhao：走近弹出战前对话 → 清完
+// 对话 → 弹"点将出征"面板（名册里已有第 9 段解锁的大哥）→ 点大哥
+// 以其本卡开战 →"天降正义"取胜结算 → 回到世界后应自动播出该节
+// 专属的战后收束一幕。
 // 先清掉第 4 节直接 complete() 留下的挂起状态（章节里程碑卡 + 战后对话），避免串场；
 // 真实流程里这两者都由同一场战斗的 onResult/onDone 成对消费，不会残留。
 await page.evaluate(() => { Engine.takePendingChapter(); Quests.takePendingPost(); });
@@ -319,6 +377,11 @@ check('战后一幕内容为该节专属（非通用句）',
   /桌洞里抢回|锦绣|绍铭/.test(postAll), postAll.slice(0, 40));
 
 // ===== 12. 老档迁移：有章节进度、无任务记录（旧格式存档） =====
+// 手工造一份"旧格式"存档（有 ch/wins/刀谱等进度，但没有新系统的
+// 任务记录字段）塞进 localStorage 再刷新：应出现「继续上局」；
+// 读档后旧进度原样保留、章节不倒退，任务系统按新规则从 m1 重新
+// 接起；按章节补发协会解锁（ch≥8 → 开张）；弹一次迁移说明且
+// 只弹这一次（标记消费掉）。
 const LEGACY = {
   ver: 1, ch: 9, day: 3, periodIdx: 2, ap: 1, apMax: 3,
   wen: 30, rep: 70, money: 40,
@@ -362,6 +425,9 @@ check('按章节补齐协会解锁（ch≥8 → 协会开张）', migrated.xiehu
 check('给出迁移说明提示', /旧档已并入刀史/.test(migrated.toasts), migrated.toasts.slice(0, 40));
 check('迁移提示只出一次（标记已消费）', migrated.flag === false);
 
+// ---------- 收尾 ----------
+// 与 smoke.mjs 相同的收尾：页面报错非空判整体失败、
+// 进程退出码 = 失败断言数（0 即全过）。
 console.log(errors.length ? '\n页面错误:\n' + errors.join('\n') : '\n无页面错误');
 console.log(fails === 0 ? '\n=== 剧情链路 ALL PASS ===' : `\n!! ${fails} 项失败`);
 await browser.close();

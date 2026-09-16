@@ -2,22 +2,86 @@
    look.hair 发色 / style 发型 / acc 随身标识(emoji) */
 'use strict';
 
+/* ================================================================
+   【这张表是干嘛的】
+   全校人物表，分两份：PEOPLE 是 30 名校园角色，PEOPLE_WAI 是
+   4 名二中番外角色（第 15 章之后才出现在校门口）。每个人是一条
+   “名片 + 剧本”：既有档案文字（intro/bio/quote），也有运行时要
+   用的数据（站位、日程、送礼偏好、采访脚本）。
+
+   【被谁消费】
+   - js/world.js  把人画到地图上：按 role/cls/home 加当前时段算出
+     NPC 站位，look 里的发型发色和 emoji 用来画小人。
+   - js/main.js  点人聊天（greet/chat 每次随机抽）、送礼（loves/
+     likes 填的是 data/items.js 的道具 id）、采访（interview，好感
+     达到门槛 ivNeed 才解锁，没写默认 30）。
+   - js/engine.js  好感、结识记录都以人物 id 为键存进存档 G。
+   - data/events.js  事件的 cast 数组填这里的人物 id，把人拉到
+     事件现场；文件末尾还会给 PEOPLE_WAI 四人补上采访与站位。
+   - 战斗层 js/battle/data.js 的同名战斗卡大多同 id，但个别不同
+     （如顾一：这里叫 zhiyin，战斗层叫 guyin）。班主任“为兵”等
+     只在台词和战斗层出场的人物不在这张表里。
+
+   【字段字典】（取值以代码实际为准，第一条“大哥”做了完整示例）
+   id        唯一代号，跨文件引用全靠它；
+   name/hao  本名 / 绰号（面板标题显示“name · hao”）；
+   vol       所属卷号（对应 data/volumes.js 的卷，配角也有）；
+   role      身份：s=学生，t=老师，p=校长。校长被钉死在校长室；
+             老师上课时段在教室、其余在办公室；学生最自由，
+             晚自习回教室、中午可能去食堂、平时在 home；
+   cls       班级（'6'/'7'/'8'/'9'；校长填 't' 只是占位）；
+   home      闲时默认场景，填 data/scenes.js 的场景 id；
+   look      外观：hair 发色（#rrggbb）、style 发型（flat/short/
+             long/bun/spiky/buzz/bob/bald/messy）、acc 随身 emoji，
+             glasses 可选 true/false（画不画眼镜）；
+   loves     最爱礼物（items.js 的 id 数组），送礼加好感最多；
+   likes     次爱礼物，加得少一些；
+   intro     一句话简介（人物面板展示）；
+   bio       生平小传（文言，据原文缩写）；
+   quote     名言（面板展示）；
+   greet     打招呼台词，字符串数组（也可直接写一个字符串，文件
+             末尾会统一包成数组；邹玉那行用 .split('|') 切分）；
+   chat      闲聊台词池（数组，每次聊天随机抽一句）；
+   interview 采访脚本：give 是采访后发放的史料卡 id（见
+             data/events.js 的 SHARDS，都是“评”卡），script 是
+             对话步骤数组（每步 {who, text}）；
+   out       毕业去向（一句话结局）。
+
+   【新手提示】
+   顶层 const PEOPLE 不会挂到 window 上，别的文件直接用裸名
+   PEOPLE 访问（靠 index.html 的 <script> 加载顺序保证先声明后
+   使用）；判断“存在与否”要写 typeof PEOPLE !== 'undefined'。
+   ================================================================ */
+
+/* 校园人物主表：数组，每个元素是一个人物对象。按所属卷分块
+   （下面的 ===== 卷N ===== 行就是分块注释）。world.js 每次进场景
+   都会遍历这张表决定谁站在哪里。 */
 const PEOPLE = [
 /* ============ 卷一 · 大哥神人仙女 ============ */
+/* ---- 代表性条目：大哥（逐字段注释示例，其余人物结构相同，不再重复） ---- */
 { id:'dage', name:'贾瀚元', hao:'大哥', vol:1, role:'s', cls:'8', home:'corridor',
+  /* ↑ 一行连写：代号、本名、绰号、所属卷、身份 s=学生、班级、闲时在走廊 */
   look:{hair:'#2b2620', style:'flat', acc:'📖'},
+  /* ↑ look：画小人用的外观——发色、平头发型、随身 emoji（书本） */
   loves:['fan'], likes:['snack','book'],
+  /* ↑ 送礼偏好：最爱“小风扇”（加好感最多），也喜欢零食等（加得少） */
   intro:'实验三异能者之首，头顶画片假诵书，破败城墙上走过整夜。',
+  /* ↑ intro：一句话简介（人物面板展示） */
   bio:'其父任于海大。为兵谴搬书，对曰“吾名为贾瀚元”。期末著《奋进新征程》八千余字，梦见破败城墙，曰“吾终将尽城墙，胜高考”。后以综评入香港中文大学。',
+  /* ↑ bio：文言小传（据原文）；quote：名言 */
   quote:'此不类高考乎？城墙者，高考也；苔藓者，困难也。',
   greet:['汝就是新来那位作史的？吾名贾瀚元，勿记错。','吾昨日有梦，梦一城墙，极高极大，走之无尽头。'],
+  /* ↑ greet：初次/打招呼台词池；chat：随机闲聊台词池（都是数组） */
   chat:['汝观吾此文如何？八千余字，一气呵成。','之韫今日在走廊，似看吾一眼。','化学吾居于领先地位，月考班倒一乃涂错卡耳。','高考之后，吾当亲告歆慧吾之心意。'],
   interview:{ give:'sh_i_dage', script:[
+    /* ↑ interview：采访脚本。give=采完发放的史料卡 id（一张“评”卡，
+       存在 data/events.js 的 SHARDS 里）；script=对话步骤 [{who, text}] */
     {who:'大哥', text:'汝欲为吾作传？善。吾之事，足书三卷。'},
     {who:'音克思', text:'只想问一句：城墙之梦，是何滋味？'},
     {who:'大哥', text:'吾走其上久，终无尽头。忽而心动——苔藓覆顶，吾终将尽之。'},
     {who:'音克思', text:'（他眼里有光。这一段，要原样写进去。）'},
   ]},
+  /* ↑ out：毕业去向，一句话结局 */
   out:'以综评入香港中文大学。'},
 { id:'shenren', name:'江润翔', hao:'神人', vol:1, role:'s', cls:'7', home:'classroom7',
   look:{hair:'#3a352c', style:'short', acc:'🍌'},
@@ -385,6 +449,8 @@ const PEOPLE = [
   out:'潜逃回家，二月不返。'},
 
 /* ============ 卷十四 · 王崇国本纪 ============ */
+/* 校长是全表唯一 role:'p' 的人物：world.js 把他钉死在校长室座位；
+   cls:'t' 只是占位（他不属于任何班）。 */
 { id:'chongguo', name:'王崇国', hao:'校长', vol:14, role:'p', cls:'t', home:'office',
   look:{hair:'#3d382f', style:'flat', acc:'🌳'},
   loves:['tree'], likes:['teacup'],
@@ -441,6 +507,8 @@ const PEOPLE = [
 ];
 
 /* 二中番外四人（不出现在校园，外传章节立传） */
+/* 这四条比主表精简：没有 greet/chat/home/interview——第 15 章解锁后，
+   data/events.js 末尾会统一给他们补上（采访无好感门槛）。 */
 const PEOPLE_WAI = [
 { id:'shengxiang', name:'谭晟翔', hao:'晟翔', vol:15, look:{hair:'#241f19',style:'short',acc:'🤝'},
   intro:'班中德高望重，能让而不能明。以三百金市五十之机，痴情付之。',
@@ -460,8 +528,13 @@ const PEOPLE_WAI = [
   quote:'予尔二择：a 朋友，b 陌路。', out:'勉许齐岳，既高考而分。'},
 ];
 
+/* 反查索引：两张表合并进同一个“id → 人物对象”字典。
+   全项目查人物都走 PEOPLE_BY_ID['dage'] 这种直接取值，不用遍历；
+   （空对象 + forEach + 赋值）这三行是本项目的惯用套路。 */
 const PEOPLE_BY_ID = {};
 PEOPLE.forEach(p => PEOPLE_BY_ID[p.id] = p);
 PEOPLE_WAI.forEach(p => PEOPLE_BY_ID[p.id] = p);
 /* normalize greet as array */
+/* 兜底：谁把 greet 写成了单个字符串，就包成单元素数组——
+   之后 world/main 一律按数组处理，不用到处判类型。 */
 Object.values(PEOPLE_BY_ID).forEach(p => { if (typeof p.greet === 'string') p.greet = [p.greet]; });

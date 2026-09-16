@@ -1,10 +1,42 @@
 /* 实验史记·春秋笔 —— UI：HUD / 面板 / 图鉴 / 成就 / 设置 */
 'use strict';
+/* ================================================================
+   【这个文件是干嘛的】
+   世界侧的全部界面：顶部 HUD 刷新、地点快捷移动、“今日风闻”栏、
+   史记面板（15 卷书架 + 打听错过的史料）、成卷阅读、人物图鉴（含
+   马刀被动/技展示）、行囊、小卖部、成就墙、系统设置（音效/打字速度/
+   马刀难度自选/存档导出导入/重开）、通用确认框。
+
+   【架构位置】
+   在 minigames.js 之后、战斗层之前由 index.html 加载（第 12 个 <script>）。
+   依赖：config 的 $ / el / SheetFX / Sfx / Save / toast / flushToasts，
+   Engine、World、Writing，以及 data 里的 VOLS / SHARDS / PEOPLE / ITEMS /
+   SCENES 等表；同时被 main.js / quests.js / blades.js 到处调用。
+   注意 UI 与 Writing 互相引用（UI 的史记面板调 Writing.open，
+   Writing 的判词回调又调 UI.closePanel）——没有模块系统也照样跑得通，
+   靠的是“全局裸名 + 运行时才解析”。
+
+   【暴露的全局名】
+   UI（IIFE 返回的大对象）：openPanel closePanel bump updateHUD
+   renderPlaces renderHearsay toastScene panelBook viewVol panelCodex
+   panelBag panelShop panelAch panelSettings confirmBox，
+   另有 panelOpen 只读访问器和 onClose 只写访问器。
+
+   【新手阅读提示】
+   1) openPanel(标题, build)：build 是“回调函数”——面板骨架先打开，
+      再把 body 元素交给你、由你往里填内容。函数在 JS 里和数字一样
+      是“值”，可以当参数传来传去（同 Python 把函数作实参）。
+   2) 面板内容普遍是“模板字符串拼 HTML + onclick 赋值”的直白写法；
+      每次操作后关面板再重开（或整段重建）来刷新，这是本项目的一贯风格。
+   ================================================================ */
 
 const UI = (() => {
+  /* panel 是底部抽屉面板本体，scrim 是它背后那层半透明遮罩（点遮罩也可关闭）。 */
   const panel = $('#panel'), scrim = $('#scrim');
   let panelOpen = false, onPanelClose = null;
 
+  /* 打开抽屉面板：写标题 → 清空旧内容 → 调 build(body) 让调用方填内容
+     → 遮罩与面板取消隐藏 → SheetFX 负责弹性滑入。 */
   function openPanel(title, build) {
     $('#panel-title').textContent = title;
     const body = $('#panel-body');
@@ -16,6 +48,9 @@ const UI = (() => {
     panelOpen = true;
     Sfx.page();
   }
+  /* 关面板：先把 panelOpen 置 false（toast 的排队判断等立即生效），
+     滑出动画交给 SheetFX；onPanelClose 是“下次关闭时执行一次”的回调
+     （用完即清空，防止重复触发）；稍候 150ms 再补播排队中的 toast。 */
   function closePanel() {
     if (!panelOpen) return;
     panelOpen = false;
@@ -24,9 +59,14 @@ const UI = (() => {
     const cb = onPanelClose; onPanelClose = null; cb && cb();
     setTimeout(flushToasts, 150);
   }
+  /* 关闭按钮（面板右上角 ×）和遮罩点击都指向 closePanel。 */
   $('#panel-close').onclick = closePanel;
   scrim.addEventListener('click', closePanel);
 
+  /* 让 HUD 某一项更新数字并“跳一下”。小技巧：先移除 .bump 再加回之前，
+     读一次 chip.offsetWidth 强制浏览器立刻重算布局（reflow）——
+     否则同一个 class 连续加两次，CSS 动画不会重播。
+     “令”那一位显示的是主线进度（行动点已退化为风味设定）。 */
   function bump(stat) {
     const elx = $('#hud-' + stat + '-v');
     const chip = $('#hud-' + stat);
@@ -36,6 +76,8 @@ const UI = (() => {
     else elx.textContent = stat === 'wen' ? G.wen : stat === 'rep' ? G.rep : G.money;
     chip.classList.remove('bump'); void chip.offsetWidth; chip.classList.add('bump');
   }
+  /* 全量刷新顶部 HUD：日期/章节/主线进度/三项资源/刀卡名号，
+     最后按当前时段给 <body> 换主题 class（白天/夜间配色随之切换）。 */
   function updateHUD() {
     $('#hud-date-main').textContent = Engine.dateLabel();
     $('#hud-period').textContent = Engine.chLabel();
@@ -43,6 +85,8 @@ const UI = (() => {
     $('#hud-wen-v').textContent = G.wen;
     $('#hud-rep-v').textContent = G.rep;
     $('#hud-money-v').textContent = G.money;
+    /* 刀卡名号：Blades（刀谱系统）可能还没加载，typeof 判活后再用；
+       没打赢过就显示“未入册”，有胜场就追加“· N胜”。 */
     if ($('#hud-blade-name')) {
       const rn = (typeof Blades !== 'undefined' && Blades.rankName()) || '未入册';
       $('#hud-blade-name').textContent = rn === '马刀之神' ? '马刀之神' : (rn + (G.wins ? ` · ${G.wins}胜` : ''));
@@ -50,6 +94,8 @@ const UI = (() => {
     document.body.classList.remove('theme-morning', 'theme-day', 'theme-night');
     document.body.classList.add(PERIOD_THEME[Engine.period()]);
   }
+  /* 底部地点栏：每个场景一个按钮，当前所在地高亮（here 类）；
+     点别处就瞬移（对话播放中禁止），顺手关掉面板。 */
   function renderPlaces() {
     const bar = $('#placelist');
     bar.innerHTML = '';
@@ -59,6 +105,9 @@ const UI = (() => {
       bar.appendChild(b);
     });
   }
+  /* “今日风闻”栏：列本章可亲历的事件（最多 4 条，已记的打勾）；
+     有错过的史料就追加一条可点击的入口，跳去史记页打听；
+     什么都没有则显示“风平浪静”。 */
   function renderHearsay() {
     const list = $('#hearsay-list');
     if (!list) return;
@@ -86,6 +135,10 @@ const UI = (() => {
 
   /* ============ 史记面板 ============ */
   function gradeName(g) { return { 4:'神品', 3:'上品', 2:'中品', 1:'下品' }[g] || ''; }
+  /* 史记面板：15 卷的“书架”。已发表的显示品级、点开阅读；未发表的显示
+     收集进度（x/y 料）与进度条，凑满 4 条可点进去撰写（Writing.open），
+     不够则 toast 提示还缺哪些。下方另有“错过的史料·可打听”区：
+     对应人物好感 ≥15 才肯开口，托人带话换转述版史料（文笔 -1）。 */
   function panelBook(mode) {
     openPanel('史记 · 卷目', body => {
       const pub = Object.keys(G.vols).length;
@@ -100,6 +153,7 @@ const UI = (() => {
         const row = el('div', 'vol-row' + (st ? '' : owned ? '' : ' locked'));
         const right = st ? `<span class="vol-grade g${st.grade}">${gradeName(st.grade)}</span>`
           : `<span class="muted">${owned}/${pool.length} 料</span>`;
+        /* 传主若配了马刀卡且还没打赢，行内附一条小字：不影响立传，胜了可录他的技。 */
         const duelNote = (!st && v.duel && !duelWon)
           ? `<small>未与传主「${(window.SJI_DATA.CHARACTERS[v.duel] || {}).hao || v.duel}」一战——不影响立传，胜之另可录其技</small>`
           : '';
@@ -130,6 +184,8 @@ const UI = (() => {
           row.onclick = () => {
             if (Engine.favorOf(ev.cast[0]) < 15) { toast('好感不足，他不肯多说'); return; }
             if (!Engine.spendAP(1)) return;
+            /* 打听成功：以 gossip 来源拿到（文笔 -1 的）转述版史料，
+               累计 8 次解锁“锦绣昼行”成就，再给对方 +1 好感表示感谢。 */
             Engine.grantShard(ev.shard, 'gossip');
             G.stats.gossip++;
             if (G.stats.gossip >= 8) Engine.award('ach_gossip');
@@ -141,6 +197,9 @@ const UI = (() => {
       }
     });
   }
+  /* 阅读已发表的某卷：按当时入槽顺序把四条史料拼成全文，
+     最后一条若以“音克思曰：”开头就单独抬成朱色史评
+     （replace 的正则 /^音克思曰：/ 把开头去掉，避免与标题重复）。 */
   function viewVol(no) {
     const v = VOL_BY_NO[no], st = G.vols[no];
     openPanel(`${v.title}（${v.i}）`, body => {
@@ -156,6 +215,9 @@ const UI = (() => {
   }
 
   /* ============ 图鉴 ============ */
+  /* 人物图鉴：图鉴人物 PEOPLE + 外校来客 PEOPLE_WAI 全员上墙，三档解锁——
+     没见过 → “？？？未识”；见过（G.flags.metPeople 有记录）→ 姓名 + 简介 +
+     马刀被动/技一行；给他立过传（G.vols 里有对应卷）→ 再解锁全文小传与语录。 */
   function panelCodex() {
     openPanel('图鉴 · 史中人', body => {
       const grid = el('div', 'pgrid');
@@ -165,12 +227,16 @@ const UI = (() => {
         const published = p.vol && G.vols[p.vol];
         const met = G.flags.metPeople.includes(p.id);
         const card = el('div', 'card pcard');
+        /* 每张卡的小头像也是 Canvas 现画的（World.avatarCanvas）。 */
         card.appendChild(World.avatarCanvas(p, 56));
         const info = el('div', '');
+        /* 马刀数据在战斗层的数据表 window.SJI_DATA.CHARACTERS 里；
+           只有见过的人才展示这行“武学情报”。 */
         const bch = window.SJI_DATA && SJI_DATA.CHARACTERS[p.id];
         const bladeLine = (met && bch)
           ? `<div class="meta" style="color:var(--cinnabar)">马刀 · 被动「${bch.passive.name}」${bch.skill ? ` · 技「${bch.skill.name}」` : (bch.skills ? ` · 技「${bch.skills[0].name}」` : '')}</div>`
           : '';
+        /* 一长串模板字符串里嵌了多个三元表达式，按 published/met 组合出不同文案。 */
         info.innerHTML = `<div class="pname">${met || published ? p.name : '？？？'}<span class="phao">${met || published ? (p.hao || '') : '未识'}</span></div>
           <div class="pbio">${published ? p.bio : met ? p.intro + '<br><span class="muted">立传后解锁全文小传。</span>' : '尚未结识。多去校园里走走。'}</div>
           ${bladeLine}
@@ -184,6 +250,7 @@ const UI = (() => {
   }
 
   /* ============ 行囊 ============ */
+  /* 行囊：把 G.bag 里数量大于 0 的东西逐个列成卡片；空则提示去小卖部。 */
   function panelBag() {
     openPanel('行囊', body => {
       const ids = Object.keys(G.bag).filter(k => G.bag[k] > 0);
@@ -198,6 +265,9 @@ const UI = (() => {
   }
 
   /* ============ 小卖部 ============ */
+  /* 小卖部：声望 ≥80 / ≥50 享八折 / 九折（嵌套三元表达式按阈值取折扣）。
+     买不起的按钮直接 disabled 置灰。买完关面板立刻重开 = 整体刷新
+     余额与价格，依旧贯彻“重画”风格。 */
   function panelShop() {
     openPanel('小卖部', body => {
       const disc = G.rep >= 80 ? 0.8 : G.rep >= 50 ? 0.9 : 1;
@@ -226,6 +296,7 @@ const UI = (() => {
   }
 
   /* ============ 成就 ============ */
+  /* 成就墙：整表渲染 ACHIEVEMENTS，解锁的卡片加 .got 高亮。 */
   function panelAch() {
     openPanel('成就', body => {
       const got = ACHIEVEMENTS.filter(a => G.ach[a.id]).length;
@@ -242,6 +313,9 @@ const UI = (() => {
   }
 
   /* ============ 设置 ============ */
+  /* 系统设置。先用 mk() 把“一行标签 + 一组段选按钮”做成局部小工厂函数，
+     之后音效/打字速度/难度各调一次就生成一行——用函数消除重复代码。
+     点任一选项都会关面板再重开设置面板（重画模式），选中态立现。 */
   function panelSettings() {
     openPanel('系统', body => {
       const mk = (label, segs, cur, cb) => {
@@ -259,6 +333,9 @@ const UI = (() => {
       mk('音效', [{ t:'开', v:false }, { t:'静音', v:true }], G.settings.muted, v => { G.settings.muted = v; });
       mk('打字速度', [{ t:'从容', v:1 }, { t:'风驰', v:2 }], G.settings.speed, v => { G.settings.speed = v; });
       /* 难度自选：写入战斗层设置，直接影响所有对决/试炼/任务的敌方强度与赏格 */
+      /* 难度不存进本游戏的 G：而是写入战斗层自己的存档（window.SJI_SAVE，
+         由 js/battle/save.js 提供）。DIFFS / DIFF_BY_V 来自战斗层配置。
+         typeof + window 判活：战斗层文件万一缺失，设置页也不能崩。 */
       if (typeof DIFFS !== 'undefined' && window.SJI_SAVE) {
         mk('马刀难度', DIFFS.map(d => ({ t: d.n, v: d.v })), Quests.diffV(), v => {
           SJI_SAVE.setSetting('lastDiff', v);
@@ -270,6 +347,9 @@ const UI = (() => {
         body.appendChild(el('div', 'muted', `当前：${dv.n} —— ${dv.tip}。难度只改敌方强度与赏格，不改剧情。`));
       }
       body.appendChild(el('div', '', '<div style="height:14px"></div>'));
+      /* 导出存档：Save.export() 转成 base64 文本放进只读文本框；
+         复制用的是较老的 document.execCommand('copy')——比新的
+         navigator.clipboard 兼容性更稳（也不要求 HTTPS）。 */
       const ex = el('div', 'card');
       ex.innerHTML = '<h3>导出存档</h3><div class="meta" style="margin-bottom:8px">换设备或清缓存前，把这串文字保存好。</div>';
       const ta1 = el('textarea', 'savebox'); ta1.readOnly = true; ta1.value = Save.export();
@@ -278,6 +358,9 @@ const UI = (() => {
       cb1.onclick = () => { ta1.select(); document.execCommand && document.execCommand('copy'); toast('已复制', '存'); };
       ex.appendChild(cb1);
       body.appendChild(ex);
+      /* 导入存档：解析成功就 location.reload() 整页刷新，以新存档启动；
+         解析失败（粘错了内容）会被 Save.import 抛出的错误打断，
+         catch 里 toast 提示，页面不会崩。 */
       const im = el('div', 'card');
       im.innerHTML = '<h3>导入存档</h3><div class="meta" style="margin-bottom:8px">粘贴此前的存档文字。</div>';
       const ta2 = el('textarea', 'savebox'); ta2.placeholder = '粘贴到此处…';
@@ -289,6 +372,7 @@ const UI = (() => {
       };
       im.appendChild(cb2);
       body.appendChild(im);
+      /* 重开一局：先弹确认框防手滑，确认后才清存档并刷新页面。 */
       const rs = el('div', 'card');
       const cb3 = el('button', 'btn', '重开一局（清除存档）');
       cb3.onclick = () => {
@@ -301,6 +385,9 @@ const UI = (() => {
   }
 
   /* ============ 确认框 ============ */
+  /* 通用确认框：现场造一层全屏遮罩 + 一张卡片 + 确定/再想想两个按钮，
+     直接 append 到 <body>（不入面板）。cssText 一条字符串写多条内联样式。
+     确定 = 先移除遮罩再执行 onYes；再想想 = 只移除遮罩什么都不做。 */
   function confirmBox(text, onYes) {
     const w = el('div');
     w.style.cssText = 'position:fixed;inset:0;z-index:95;display:grid;place-items:center;background:rgba(20,18,12,.4)';
@@ -316,6 +403,10 @@ const UI = (() => {
     document.body.appendChild(w);
   }
 
+  /* 对外接口一览。get panelOpen / set onClose 是“访问器属性”：
+     外界读 UI.panelOpen、或写 UI.onClose = 某函数 时，实际执行的是
+     这两个小函数——内部变量依然私有，赋值进去的回调也只在
+     closePanel 里被取用一次。 */
   return { openPanel, closePanel, bump, updateHUD, renderPlaces, renderHearsay, toastScene,
     panelBook, viewVol, panelCodex, panelBag, panelShop, panelAch, panelSettings, confirmBox,
     get panelOpen() { return panelOpen; }, set onClose(f) { onPanelClose = f; } };

@@ -2,15 +2,65 @@
    自由度：世界可自由行走，任务是"指引"不是"门禁"；未接主线也能满校园挑战刀手。
    据卷八《马刀书》兴亡史编排主线。 */
 'use strict';
+/* ================================================================
+   【这个文件是干嘛的】
+   任务系统：主线任务链 MAIN（9 节，每节都是一场带专属剧情的高难
+   战斗）+ 支线任务表 SIDE（7 条，好感/胜场等条件满足后出现，完成
+   奖励强力人物或永久被动）+ 难度自选表 DIFFS。任务是"指引"不是
+   "门禁"：只负责 HUD 指引卡、世界地图任务点、战前战后剧情与结算
+   赏格，不拦着玩家在校园里自由行动。
+   本文件数据与逻辑混编：上半是四张表（DIFFS/MAIN/SIDE/CH_AFTER），
+   下半是 Quests 对象的查询/开战/结算/渲染方法。
+
+   【架构位置】
+   融合层，位于世界（main.js/world.js）与战斗（battle/）之间。
+   数据依赖 SJI_DATA.CHARACTERS（角色卡）、SCENE_BY_ID（场景表）；
+   逻辑依赖 config（el/pick/toast/Save）、Engine（金钱/声望/好感/
+   syncChapter）、Blades（身怀之技/稀有刀卡）、UI（面板）、
+   World（切场景/寻路）。
+   世界↔战斗的命脉经过这里：main.js 战前调 preScript() 播剧情 →
+   SJI_UI.startBattle(cfg) 开战 → 引擎打完经 SJI_BATTLE_HOOKS.onResult
+   调 complete() → complete 里 stashPost() 把战后剧情挂起 → 回到世界
+   后 main.js 用 takePendingPost() 取出播映。一存一取、成对消费。
+
+   【暴露的全局名】
+   DIFFS / DIFF_BY_V（难度表）、Quests（主对象：all / byId / done /
+   chapterNow / progressLabel / current / sideOpen / markers /
+   nearMarker / preScript / postScript / start / pickAndStart /
+   complete / migrateInnates / roster / unlockFighter / diffV / render）。
+
+   【新手阅读提示】
+   1) JS 的坑：顶层 const 不会自动挂到 window——文件末尾的
+      window.Quests = Quests 是显式挂载；别的文件判活要写
+      typeof Quests !== 'undefined'，直接裸名比较会抛 ReferenceError。
+   2) 章节号 G.ch 不随睡觉/时间推进，而是 chapterNow() 按主线完成度
+      现算的；engine.js 的 syncChapter() 只在算出的章节数更大时才
+      写入，所以章节"单向只进不退"，老存档的进度绝不会回跳。
+   3) 全文件最大的坑在 start()：hpScale/restFull 这类战场参数必须
+      放进 cfg.stage 子对象，战斗引擎只认 cfg.stage——写在 cfg 顶层
+      会被静默忽略（曾导致十几处敌人血量缩放失效且无任何报错）。
+      start() 末尾那段"归位"代码就是防它的。
+   ================================================================ */
 
 /* 难度自选：影响敌方强度与赏格（写进 SJI_SAVE.settings.lastDiff，战斗层直接读） */
+/* 每档一条对象，字段结构：
+     v   难度代号（存档里存的就是它，也是 DIFF_BY_V 的 key）
+     n   界面显示名
+     mul 赏格倍率——complete() 结算零花钱/声望时相乘
+     tip 选项旁的一句说明
+   共 5 档：简单/普通/困难/极难/噩梦，强度与赏格逐档上调。 */
 const DIFFS = [
   { v: 'easy',    n: '简单', mul: 0.8, tip: '敌方行动点少、伤害低；赏格 ×0.8' },
   { v: 'normal',  n: '普通', mul: 1.0, tip: '标准强度（默认）' },
   { v: 'hard',    n: '困难', mul: 1.3, tip: '敌方更狠；赏格 ×1.3' },
+  /* 代表条目（极难）：v 存档用、n 显示名、mul=1.6 即赏格乘 1.6、
+     tip 是按钮旁的说明文字。"多人平衡失效"等术语由战斗引擎按难度解释。 */
   { v: 'extreme', n: '极难', mul: 1.6, tip: '敌方 5 动、强制狂攻、击破不回血、多人平衡失效（敌人不减血、汝无补偿）；赏格 ×1.6' },
   { v: 'nightmare', n: '噩梦', mul: 2.2, tip: '敌方全员最优行动 + 资源碾压 + 多人平衡失效；赏格 ×2.2' },
 ];
+/* 由代号反查难度条目的索引表：先建空对象，再 forEach 把 DIFFS 逐条
+   塞进去（key 用代号 v）。之后 DIFF_BY_V['hard'] 直接拿到"困难"档——
+   JS 对象即 Python 的 dict，obj.k 与 obj['k'] 两种写法等价。 */
 const DIFF_BY_V = {};
 DIFFS.forEach(d => DIFF_BY_V[d.v] = d);
 
@@ -25,6 +75,19 @@ const Quests = (() => {
      foe:     对手开战前的一句随机挑衅（追加在 pre 末尾；who 用能解析出头像的号）
      post:    战胜后的收束
      postLose:战败后的一段（接在结算页之后播） */
+  /* MAIN 每条还有这些公共字段（上面未提到的）：
+     id    任务代号——存档 G.quests[id] 记完成与否，全文件靠它检索
+     name  任务名（HUD 指引卡与结算标题用）
+     where 场景 id（任务发生在哪个场景，配合 SCENE_BY_ID 查短名）
+     pos   场景内坐标 [x, y]，任务点与寻路锚点
+     need  解锁条件函数：返回 true 才在世界上出现（主线=上一节已完成）
+     cfg   战斗配置，最终交给 SJI_UI.startBattle：
+           enemies 敌人 id 数组（首波）；waves 多波次（每波一个数组，
+                   打完接下一波）；restFull 波次间回满血；hpScale 敌人
+                   血量倍率（<1 放水、>1 加强）；rule 本关特则（引擎按
+                   id 分发逻辑、desc 只是给玩家看的文案）；allies 援军；
+                   diff 强制难度（null 表示随玩家自选难度）
+   字段级示例见 m2（多波次 + 阵间回血 + 特则一应俱全）。 */
   const MAIN = [
     { id: 'm1', name: '初执马刀', where: 'playground', pos: [750, 450],
       goal: '操场寻万震，讨教第一刀', hint: '白板之身，先赢一场，录他一技',
@@ -52,9 +115,16 @@ const Quests = (() => {
         { who: '音克思', text: '（白板之身，果然不行。刀谱还空着——先赢一场再说。）' },
       ] },
 
+    /* —— 代表条目 m2 逐字段 ——
+       id/name/where/pos：代号 m2、显示名、发生在走廊场景、任务点坐标。
+       goal/hint：指引卡上的目标一句话与战术提示一句话。
+       need：上一节 m1 打完才解锁（done 查的是存档 G.quests['m1']）。 */
     { id: 'm2', name: '实验三异能者', where: 'corridor', pos: [720, 260],
       goal: '连战大哥、神人、仙女三人', hint: '三阵连战，阵间回血；异能者各有异能',
       need: () => Q.done('m1'),
+      /* waves：三波轮战（大哥→神人→仙女）；restFull：波次之间回满血；
+         hpScale: 0.75——三连战太难，把每波敌人血量压到 75% 作补偿；
+         rule：本关特则（dyad 由引擎解释，desc 是给玩家看的文案）。 */
       cfg: { enemies: ['dage'], waves: [['dage'], ['shenren'], ['xiannv']], restFull: true, hpScale: 0.75, rule: { id: 'dyad', desc: '相邻敌人伤害+1（二声部合唱）' } },
       reward: { money: 12, rep: 3 },
       pre: [
@@ -313,7 +383,22 @@ const Quests = (() => {
   ];
 
   /* ============ 支线：满足条件触发，完成解锁强力人物或永久效果 ============ */
+  /* SIDE 每条与主线同构（id/name/where/pos/goal/cfg/pre/foe/post/
+     postLose 含义都相同），差别在触发与奖励两处：
+       cond     触发条件函数（好感度/胜场/已录卡…），sideOpen() 每次刷
+                HUD 都会执行一遍，条件满足且未完成才显示任务点
+                （主线靠 need 排先后，支线靠 cond 论条件）
+       condHint 条件的文字版，给玩家看"还差什么"
+       reward   除 money 外还能发：unlock 把人物加进点将名册、
+                innate 授身怀之技（永久被动）、rare 授稀有刀卡、
+                text 结算页上的一行文言说明
+   字段级示例见 s_dage。 */
   const SIDE = [
+    /* —— 代表条目 s_dage 逐字段 ——
+       cond: 大哥好感 ≥20 才触发（Engine.favorOf 读存档里的好感表）。
+       condHint: 条件文字版「大哥好感≥20」。
+       reward.unlock: 战胜后「大哥」进点将名册；reward.innate: 授身怀
+       之技「城墙之梦」（永久生效、无需装备）；text: 结算页的说明行。 */
     { id: 's_dage', name: '大哥的护手霜', where: 'corridor', pos: [400, 300],
       goal: '大哥好感≥20，再与他一战', cond: () => Engine.favorOf('dage') >= 20,
       cfg: { enemies: ['dage'], hpScale: 1.2 },
@@ -516,15 +601,27 @@ const Quests = (() => {
         m4 世界马刀协会 → ch≥8（协会/试炼/生存开）
         m6 刀禁令风波   → ch≥12（刀禁期起）
         m9 马刀的结局   → ch16（终章） */
+  /* 表本体：key 是主线任务 id，value 是打完该节后应到达的章节号
+     （chapterNow() 取所有已完成条目里的最大值）。 */
   const CH_AFTER = { m1: 1, m2: 3, m3: 5, m4: 8, m5: 9, m6: 12, m7: 13, m8: 14, m9: 16 };
 
+  /* Quests 对象本体：以下方法都是对上面几张表的查询与驱动。
+     done(id) { … } 这种是 ES6 对象方法简写，等价于 done: function (id) { … }；
+     方法体里的 this 指代 Q 自身（所以能写 this.done / this.current）。 */
   const Q = {
+    /* 三张表的便捷访问：all=主线+支线合并（concat 不改原数组、返回新
+       数组）；byId 按 id 查任务；done 查存档——!! 把任意值强转成布尔
+       （!!undefined === false），相当于 Python 的 bool()。 */
     all() { return MAIN.concat(SIDE); },
     mainList() { return MAIN.slice(); },
     sideList() { return SIDE.slice(); },
     byId(id) { return this.all().find(q => q.id === id); },
     done(id) { return !!G.quests[id]; },
     /* 主线进度 → 章节号 */
+    /* 扫一遍已完成的主线，取 CH_AFTER 对应章节的最大值。注意它只负责
+       "算"；真正写进 G.ch 的是 engine.js 的 syncChapter()——那边仅当
+       算出的章节数更大时才赋值，因此章节单向只进不退，老存档的进度
+       绝不会回跳。 */
     chapterNow() {
       let ch = 0;
       MAIN.forEach(q => { if (this.done(q.id) && CH_AFTER[q.id] != null) ch = Math.max(ch, CH_AFTER[q.id]); });
@@ -549,16 +646,25 @@ const Quests = (() => {
       if (cur) list.push({ q: cur, main: true });
       this.sideOpen().forEach(q => list.push({ q, main: false }));
       /* 聚类后错位：距离 <70 的点视为一团，按扇形摊开（左右各展开约 42px） */
+      /* 先按场景分组：byScene 是"场景 id → 该场景任务点数组"的表。
+         (byScene[x] = byScene[x] || []).push(m) 是懒初始化惯用法——
+         没有就先放个空数组再 push。 */
       const byScene = {};
       list.forEach(m => { (byScene[m.q.where] = byScene[m.q.where] || []).push(m); });
       Object.keys(byScene).forEach(sid => {
         const arr = byScene[sid];
         const groups = [];
+        /* 聚类：给每个任务点找一个"距它 <70px"的已有组并入，找不到
+           就自立一组。Math.hypot(dx,dy) 算直角三角形斜边长，即两点距离。 */
         arr.forEach(m => {
           const g = groups.find(g => Math.hypot(g[0].q.pos[0] - m.q.pos[0], g[0].q.pos[1] - m.q.pos[1]) < 70);
           if (g) g.push(m); else groups.push([m]);
         });
         groups.forEach(g => {
+          /* 错位：只有一个点就原位显示（slice 浅拷贝坐标数组，防多处
+             共用同一引用）；多个点按扇形摊开——ang 从正上方(-90°)起步、
+             相邻点隔 0.9 弧度，水平摊 96px、垂直摊 34px（压扁的椭圆），
+             算出的 dpos 只用于显示/交互，寻路仍用原 pos。 */
           g.forEach((m, i) => {
             if (g.length < 2) { m.dpos = m.q.pos.slice(); return; }
             const ang = -Math.PI / 2 + (i - (g.length - 1) / 2) * 0.9;
@@ -575,6 +681,9 @@ const Quests = (() => {
       return m ? m.dpos.slice() : [0, 0];
     },
     /* 玩家附近的任务点（供交互条） */
+    /* 找离玩家最近的同场景任务点（供交互条用）：过滤场景 → 映射成
+       {任务点, 距离} → 按距离升序 → 取第一个；一个都没有时靠
+       || null 兜底。r 是判定半径，不传默认 100px。 */
     nearMarker(sceneId, x, y, r) {
       r = r || 100;
       return this.markers().filter(m => m.q.where === sceneId)
@@ -582,17 +691,25 @@ const Quests = (() => {
         .filter(o => o.d < r).sort((a, b) => a.d - b.d)[0] || null;
     },
     /* 战前脚本：专属剧情 + 对手一句随机挑衅。无专属数据时返回 null（由调用方兜底） */
+    /* (q.pre || []).slice() 是双保险：没写过 pre 就当空数组，slice 再
+       浅拷贝一份，防止往里 push 挑衅台词时污染任务表的原始数据。 */
     preScript(q) {
       const s = (q.pre || []).slice();
       if (q.foe && q.foe.pool && q.foe.pool.length) s.push({ who: q.foe.who, text: pick(q.foe.pool) });
       return s.length ? s : null;
     },
     /* 战后脚本：胜/败分开 */
+    /* win ? post : postLose 是三目运算符，
+       相当于 Python 的 q.post if win else q.postLose。 */
     postScript(q, win) {
       const s = win ? q.post : q.postLose;
       return (s && s.length) ? s.slice() : null;
     },
     /* 结算时先把战后对话挂起，等回到世界（战斗覆盖层关闭）再播 */
+    /* 为什么不直接播：结算页此刻还盖在世界上，剧情画面会被压住——
+       所以先存进 _pendingPost，等 main.js 战斗收尾时调
+       takePendingPost() 取走播映；取时顺手清空，一存一取成对消费，
+       多场战斗之间不会串场。 */
     stashPost(q, win) { this._pendingPost = q ? this.postScript(q, win) : null; },
     takePendingPost() { const s = this._pendingPost; this._pendingPost = null; return s; },
     _pendingPost: null,
@@ -605,6 +722,11 @@ const Quests = (() => {
       ];
     },
     /* 开战：难度自选 + 出战角色选择 → SJI_UI.startBattle */
+    /* 开战总入口步骤：① 先 Blades.registerChar() 按最新成长重造主角
+       战斗卡；② Object.assign(默认配置, q.cfg) 合并——同名属性后者
+       覆盖前者，任务表里写过的字段会盖掉默认值（JS 合并配置的惯用法）；
+       ③ q.cfg.diff === null 特判：任务不锁难度、随玩家自选；
+       ④ 战场参数归位进 cfg.stage（见下方注释，本项目著名的坑）。 */
     start(q, fighterId) {
       const diff = Quests.diffV();
       Blades.registerChar();
@@ -618,6 +740,8 @@ const Quests = (() => {
       if (!cfg.rule) cfg.rule = null;
       /* hpScale / restFull 属于战场配置，引擎只从 cfg.stage 读取（engine.js HP 缩放与阵间回血）。
          任务数据为书写方便放在顶层，这里归位——否则全部静默失效。 */
+      /* "搬家"写法：把 hpScale/restFull 抄进 cfg.stage 之后，再用
+         delete 运算符删掉 cfg 顶层的原字段，避免两处数据不一致。 */
       if (cfg.hpScale !== undefined || cfg.restFull) {
         cfg.stage = Object.assign({}, cfg.stage || {});
         if (cfg.hpScale !== undefined) { cfg.stage.hpScale = cfg.hpScale; delete cfg.hpScale; }
@@ -625,6 +749,10 @@ const Quests = (() => {
       }
       SJI_UI.startBattle(cfg);
     },
+    /* 点将出征：名册只有主角一人就直接开打；否则弹面板挑人。
+       el() 是 config.js 的 DOM 元素工厂，UI.openPanel 开底部抽屉；
+       roster.forEach 给每个可选角色生成一张卡片，点谁就以谁出战
+       （主角保有刀谱与身怀，别人用自己的本卡）。 */
     pickAndStart(q) {
       const roster = Quests.roster();
       if (roster.length <= 1) { this.start(q); return; }
@@ -645,14 +773,21 @@ const Quests = (() => {
       });
     },
     /* 完成结算：发赏、解锁、推进 */
+    /* 战斗引擎战胜后经钩子回调到这里：按难度倍率发钱发声望、发放
+       身怀之技/稀有刀卡/解锁人物、标记任务完成、推进章节、挂起战后
+       剧情，最后把结算文案拼成 HTML 字符串返回（battle-ui 会把它插进
+       战斗结算页展示）。 */
     complete(q) {
       const rw = q.reward || {};
+      /* 赏格随难度浮动：查难度表拿 mul 倍率，Math.round 四舍五入取整。 */
       const mul = DIFF_BY_V[Quests.diffV()].mul;
       const money = Math.round((rw.money || 0) * mul);
       const rep = Math.round((rw.rep || 0) * mul);
+      /* lines 收集一段段 HTML 字符串，最后 join('') 拼成整段结算文案。 */
       let lines = [`<div><b>任务完成：「${q.name}」</b></div>`];
       if (money) { Engine.addMoney(money); lines.push(`<div>零花钱 +${money}${mul !== 1 ? `（难度 ×${mul}）` : ''}</div>`); }
       if (rep) { Engine.addRep(rep); lines.push(`<div>声望 +${rep}</div>`); }
+      /* 下面三种特殊奖励都做了"已持有"去重：新的才发，旧的提示一句。 */
       if (rw.innate) {
         const info = Blades.INNATE_INFO[rw.innate];
         if (info) {
@@ -671,12 +806,14 @@ const Quests = (() => {
         else if (ch) lines.push(`<div>（${ch.hao} 早已在列）</div>`);
       }
       if (rw.text) lines.push(`<div class="yueks">${rw.text}</div>`);
+      /* 标记完成：done()/current()/chapterNow()/进度统计全认这个字段。 */
       G.quests[q.id] = true;
       Engine.award('ach_quest');
       /* 主线完成 → 章节推进（世界随之变化：协会开张 / 刀禁期 / 试炼解锁） */
       const chAdvanced = Engine.syncChapter();
       /* 战后收束：挂起，回世界后播 */
       this.stashPost(q, true);
+      /* 结算页顺带预告下一个任务；主线全部打完则换成收卷文案。 */
       const cur = this.current();
       if (cur) lines.push(`<div style="margin-top:6px">▸ 新任务：「${cur.name}」——${cur.hint}</div>`);
       else lines.push(`<div style="margin-top:6px" class="yueks">音克思曰：刀者，终将入书。全书将成。</div>`);
@@ -704,7 +841,10 @@ const Quests = (() => {
       return got.length;
     },
     /* 出战名册 */
+    /* 可点将出征的角色 id 表：同样懒初始化，主角永远在列。 */
     roster() { if (!G.roster) G.roster = ['yinkesi']; return G.roster; },
+    /* 解锁强力人物入册：已在册返回 false（结算页据此显示"早已在列"）；
+       新解锁则 toast 提示 + 存档 + 刷新 HUD。 */
     unlockFighter(id) {
       const r = this.roster();
       if (r.includes(id)) return false;
@@ -714,11 +854,16 @@ const Quests = (() => {
       Save.write(); this.render();
       return true;
     },
+    /* 当前难度代号：读设置里上次选的档，两级 || 兜底——先兜"从没存过
+       设置"，再兜"存的代号不认识"（老存档/手改），一律退回 'normal'。 */
     diffV() {
       const d = (window.SJI_SAVE && SJI_SAVE.settings.lastDiff) || 'normal';
       return DIFF_BY_V[d] ? d : 'normal';
     },
     /* HUD 任务指引卡 */
+    /* 当前主线 + 最多 3 条可接支线拼成 HTML，一次性 innerHTML 赋值。
+       按钮不逐个绑事件，而是写上 data-quests / data-finale 属性，
+       最后统一 querySelectorAll 找出来绑 onclick——事件委托的简化版。 */
     render() {
       const box = document.getElementById('questcard');
       if (!box) return;
@@ -727,6 +872,7 @@ const Quests = (() => {
       const prog = this.progressLabel();
       let h = '';
       if (cur) {
+        /* 查场景表拿短名做按钮文字，查不到就退回场景 id。 */
         const sc = SCENE_BY_ID[cur.where];
         h += `<div class="qc-main"><div class="qc-tag">主线 ${prog}</div>
           <div class="qc-name">${cur.name}</div>
@@ -748,6 +894,8 @@ const Quests = (() => {
       }
       box.innerHTML = h;
       box.classList.remove('hidden');
+      /* 「前往」按钮：不在目标场景就先 World.travel 切过去，等 120ms
+         （让场景切换先走完）再 World.walkTo 走到任务点下方 40px 处。 */
       box.querySelectorAll('[data-quests]').forEach(b => {
         b.onclick = (e) => {
           e.stopPropagation();
@@ -761,6 +909,7 @@ const Quests = (() => {
           toast(`前往：${q.goal}`, '令');
         };
       });
+      /* 「终章 · 高考」按钮：转发给 main.js 的收卷流程处理。 */
       box.querySelectorAll('[data-finale]').forEach(b => {
         b.onclick = (e) => {
           e.stopPropagation();

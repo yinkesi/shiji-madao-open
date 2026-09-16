@@ -1,5 +1,37 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+<!--
+  ============================================================
+  实验史记·马刀行 —— 页面骨架（index.html）
+  【这份文件是干嘛的】
+  HTML 是网页的"骨架"：它本身不会动，只负责把一个个元素（用
+  <div>、<button> 等标签写出的盒子）摆到页面上。让页面动起来的是
+  另外两套分工：
+    · CSS（css/style.css）管"长什么样"：颜色、圆角、玻璃质感；
+    · 文件末尾的 23 个 <script>（js 目录）管"怎么动"：游戏逻辑
+      全在那边。
+  而 JS 抓住页面元素的"把手"，就是本文件里各种 id：JS 用
+  document.querySelector('#hud') 这样的方式按 id 找到元素，
+  再改它的内容、增删它的 class。
+
+  【页面结构地图】（从上到下，按出现顺序）
+    1. screen-title   标题页：开卷 / 继续上局 / 导入存档
+    2. screen-game    游戏主界面：世界画布 + 顶部 HUD + 校园见闻
+                      + 任务卡 + 地点导航条 + 交互提示条
+    3. panel + scrim  底部抽屉面板（图鉴/成就/系统/史记/行囊共用）
+    4. dialog         对话层：立绘舞台 + 对话框 + 选项
+    5. minigame       小游戏覆盖层（第二块画布）
+    6. chapter-card   章节转场卡（"第 X 章"大字过场）
+    7. battle         马刀战场覆盖层（战棋界面 + 结算页）
+    8. 零碎小件：modal-mask 战斗弹层、tooltip 小提示、toasts 飘字
+  【新手阅读提示】
+  1) 大部分区块默认"藏"着：JS 增删 class="hidden"（对应 CSS 里
+     display:none）来切换谁显示谁隐藏。整个游戏就是在一块窗口里
+     轮流掀开这些"屏幕"和"层"。
+  2) 末尾 23 个 <script> 的顺序绝对不能乱，原因见文件末尾的大段
+     注释；先读完上面的骨架再往下看脚本，思路更清楚。
+  ============================================================
+-->
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
@@ -9,6 +41,14 @@
 <body class="theme-morning">
 
 <!-- 标题页 -->
+<!--
+  游戏的第一块"屏幕"：class="screen" 让它铺满整个窗口（position:fixed），
+  是唯一初始就可见的屏幕，其余屏幕都带着 hidden 藏着。
+  三个按钮的 id（btn-new 开新档 / btn-continue 继续存档 /
+  btn-import-title 导入存档）是 main.js 绑定点击事件的抓手。
+  aria-hidden="true" 是给读屏器（无障碍工具）的提示：
+  背景纹理和印章这两个纯装饰元素不用念出来。
+-->
 <div id="screen-title" class="screen">
   <div class="title-bg" aria-hidden="true"></div>
   <div class="title-seal" aria-hidden="true">刀</div>
@@ -28,10 +68,37 @@
 </div>
 
 <!-- 游戏主界面 -->
+<!--
+  真正玩游戏的"屏幕"，初始带 hidden，点了「开卷」才由 JS 显示。
+  里面叠了好几层，从底到顶依次是：
+    · canvas#world  世界画布：校园地图、可走的人物、任务标记全由
+      JS 每一帧重画在这块"白布"上（canvas 是可用代码作画的元素）；
+    · #hud          顶部玻璃状态条（见下方注释）；
+    · #hearsay      右上角"校园见闻"播报栏；
+    · #questcard    右侧任务指引卡（主线进度 + 可接支线）；
+    · #placelist    底部地点导航条（点地名瞬移，末尾还有「歇一日」）；
+    · #ctxbar       交互提示条（走近人物/地点才弹出按钮）。
+  后五者都挂了 class="glass"（毛玻璃卡），悬浮在画布之上。
+-->
 <div id="screen-game" class="screen hidden">
+  <!--
+    世界画布：整个校园的"舞台"。JS（js/world.js）不停地在上面
+    画地图、人物小人、任务标记并响应点击；它没有内容标签，
+    宽高由 CSS 拉满整个窗口。
+  -->
   <canvas id="world"></canvas>
 
   <!-- 顶部玻璃 HUD -->
+  <!--
+    HUD = Heads-Up Display（抬头显示），借自飞行仪表盘的词，
+    指一直悬在画面上方、不遮挡主视野的状态栏。
+    左半边：史记/刀谱两个入口按钮（btn-hud-book / btn-hud-blade，
+    点开对应抽屉面板）+ 日期牌（hud-date 两行：周次 + 时段）。
+    右半边：四个数值牌（hud-ap 主线进度"令"、hud-wen 文笔、
+    hud-rep 声望、hud-money 零花钱，数字都在各自带 -v 后缀的
+    <b> 里，JS 只改那几个字）+ 行囊和系统两个按钮。
+    数值变化时 JS 会给牌子加 bump class 触发一个放大动画。
+  -->
   <header id="hud" class="glass">
     <div class="hud-left">
       <button class="hud-chip hud-title" id="btn-hud-book" title="翻开史记">
@@ -58,22 +125,48 @@
   </header>
 
   <!-- 校园见闻（本章可亲历之事） -->
+  <!--
+    右上角的"新闻栏"：js/ui.js 把当前章节可触发的事件一条条填进
+    #hearsay-list（初始是空的，内容由 JS 动态生成）；做过的事件
+    会打上 .done 标记变绿。纯展示，不可点击。
+  -->
   <div id="hearsay" class="glass">
     <div class="hearsay-title">校园见闻</div>
     <div id="hearsay-list"></div>
   </div>
 
   <!-- 任务指引卡（主线 + 可接支线） -->
+  <!--
+    右侧的任务卡：JS（js/quests.js）往这个空盒子里塞当前主线的
+    名称/目标/提示，以及下方一排"支线可接"列表。它是纯容器，
+    里里外外全靠 JS 生成，所以源码里只有一个开合标签。
+  -->
   <div id="questcard" class="glass hidden"></div>
 
   <!-- 底部地点导航条 -->
+  <!--
+    底部一排"地点按钮"：JS 按当前章节把可去的地点渲染成
+    .place-btn 圆角胶囊，点一下就瞬移；所在地点高亮（.here）。
+    队伍末尾还常驻一个「歇一日」按钮（过日子的入口）。
+  -->
   <nav id="placelist" class="glass"></nav>
 
   <!-- 交互提示条 -->
+  <!--
+    走到人物或设施旁边时才弹出的一行按钮（交谈/赠礼/约战……），
+    由 js/main.js 按脚下坐标生成；平时带着 hidden 藏起来。
+  -->
   <div id="ctxbar" class="glass hidden"></div>
 </div>
 
 <!-- 通用面板（图鉴/成就/系统/史记/行囊） -->
+<!--
+  一个从屏幕底部滑上来的"抽屉"（class="sheet"）。全游戏所有列表
+  界面共用这一个容器：JS 往 #panel-title 写标题、往 #panel-body
+  塞具体内容，用完清空，省得每个界面写一套 HTML。动画由
+  js/config.js 的 SheetFX 弹簧驱动。下一行 #scrim 是抽屉身后的
+  半透明遮罩，点它等于点关闭。
+-->
 <div id="panel" class="sheet hidden">
   <div class="sheet-grabber"></div>
   <div class="sheet-head">
@@ -85,6 +178,15 @@
 <div id="scrim" class="hidden"></div>
 
 <!-- 对话层 -->
+<!--
+  全屏对话层，由 js/dialog.js 驱动，盖在世界（或任何界面）之上：
+    · #dialog-cast  舞台区：JS 往里摆说话角色的立绘 canvas，
+      轮到谁说话谁高亮，其余变暗（.dim）；
+    · #dialog-box   底部对话框：名字 #dialog-name、正文 #dialog-text
+      （打字机逐字效果，打字中带 .typing 类）、选项容器
+      #dialog-choices（有分支时 JS 在这里生成按钮）、右下角的
+      "下一句"圆钮 #dialog-next。点击对话框本体=翻页。
+-->
 <div id="dialog" class="hidden">
   <div id="dialog-cast"></div>
   <div id="dialog-box" class="glass-dark">
@@ -96,12 +198,22 @@
 </div>
 
 <!-- 小游戏层 -->
+<!--
+  小游戏（月考迟到/陀螺/食堂冲刺/乒乓球）专用的全屏覆盖层：
+  又一块独立画布 #mg-canvas，开局时 JS 换上对应游戏循环来画；
+  #mg-hud 显示该局自己的分数与提示。逻辑在 js/minigames.js。
+-->
 <div id="minigame" class="hidden">
   <canvas id="mg-canvas"></canvas>
   <div id="mg-hud" class="glass"></div>
 </div>
 
 <!-- 章节转场 -->
+<!--
+  "第 X 章"的全屏过场卡：深色底 + 竖排大字（日期 cc-date、
+  标题 cc-title、副题 cc-sub 由 JS 填），点任意处继续。
+  主线每推进一节，回到世界前 main.js 会先掀开它。
+-->
 <div id="chapter-card" class="hidden">
   <div class="cc-inner">
     <div class="cc-date" id="cc-date"></div>
@@ -111,8 +223,20 @@
 </div>
 
 <!-- 马刀战场覆盖层 -->
+<!--
+  战棋对战的整块"战场屏幕"：开战时盖住世界，胜/负结算完再由
+  JS 关掉。里面两大块：
+    · #battle-stage   战场本体（下面逐段注释）；
+    · #battle-result  结算页（战斗中一直 hidden，打完才显示）。
+-->
 <div id="battle" class="hidden">
   <!-- 战场 -->
+  <!--
+    战场本体，从上到下：
+    .btl-top 顶栏（标题/回合数/稀有刀卡切换/调速静音认输离场）；
+    #battle-wrap 主区，左右两栏（#battle-left 棋盘+操作，
+    #battle-right 敌军单+战报）。
+  -->
   <div id="battle-stage">
     <div class="btl-top">
       <h2 id="battle-title">马刀场</h2>
@@ -126,6 +250,16 @@
         <button class="btn btn-small" id="b-exit">离场</button>
       </div>
     </div>
+    <!--
+      主区左右两栏。左栏 #battle-left：战场棋盘 canvas#battle-canvas
+      （也是 JS 每帧手绘，点击格子移动/攻击）、其上悬浮的"阶段横幅"
+      #phase-banner（我方/敌方回合提示，靠 .on 类显隐）、下方
+      #player-card 玩家状态条（头像/血条三件套：hpbar-ghost 白色
+      残影缓慢追赶、hpbar-in 绿色真实血量、hpbar-tx 文字；行动点
+      #ap-pips 一排小圆点；状态标签 #pc-st）、再下 .actbar 一排
+      行动按钮（购刀/购马/刀击/马踢/驱赶/技能/撤销/血祭/待机）。
+      右栏 #battle-right：#enemy-panel 敌军一览、#log-panel 滚动战报。
+    -->
     <div id="battle-wrap">
       <div id="battle-left">
         <div id="canvas-outer">
@@ -160,18 +294,61 @@
     </div>
   </div>
   <!-- 战斗结算 -->
+  <!--
+    结算页：胜负大印章 + 战果明细都由 JS 生成塞进 #result-body。
+    印章样式（.result-seal）在 CSS 里，赢了朱红、输了灰。
+  -->
   <div id="battle-result" class="hidden">
     <div id="result-body"></div>
   </div>
 </div>
 
 <!-- 战斗弹层（猜拳/对话/结算明细） -->
+<!--
+  #modal-mask 全屏暗幕 + #modal-box 居中白卡：战前猜拳、战斗中
+  人物插话、波次间"增益三选一"这类临时弹窗，内容都由 JS 现往
+  #modal-box 里填，用完即关（.on 类控制显隐）。
+  #tooltip 是黑色小提示框：战场上悬停格子/按钮时，JS 把说明文字
+  写进来并挪到鼠标旁，平时 display:none。
+-->
 <div id="modal-mask"><div id="modal-box"></div></div>
 <div id="tooltip"></div>
 
 <!-- Toast -->
+<!--
+  屏幕上方飘出的小通知（"获得 xx""存档完成"之类）的容器：
+  js/config.js 的 toast() 往这里塞一条 .toast 气泡，几秒后自动
+  淡出移除。pointer-events:none 让它不挡下面的点击。
+-->
 <div id="toasts"></div>
 
+<!--
+  ============================================================
+  23 个 <script>：这里的顺序就是"依赖顺序"，一个都不能乱。
+  【为什么不能乱】本项目没有模块系统（没有 import/export），23 个
+  文件共享同一个全局作用域，文件之间靠"前面文件定义的全局变量"
+  互相调用。浏览器按书写顺序逐个执行：轮到某个文件时，它要用的
+  名字必须已经由前面的文件定义好，否则当场报错、页面瘫痪。
+  【排列规律】（谁被依赖得多，谁排前面）
+    1. js/config.js      工具箱：查元素 $、弹簧动画、音效、存档……
+                         几乎所有人都依赖它，必须排第一个；
+    2. js/data/*.js      五份"设定集"纯数据：人物/物品/场景/事件/
+                         卷目，只供别人读，不依赖任何逻辑代码；
+    3. engine/world/dialog/writing/minigames/ui
+                         各功能模块：总引擎、校园世界、对话、撰史、
+                         小游戏、面板 UI；
+    4. js/battle/*       马刀战斗子系统自成一体：自己的配置/数据/
+                         引擎/音效/存档/场景/融合层（与外面的同名
+                         文件互不相干）；
+    5. blades/quests     刀谱系统、任务系统；
+    6. js/battle-ui.js   战斗界面融合层；
+    7. js/main.js        总指挥：要把前面所有人都拧起来、负责开机
+                         启动，所以必须排在最后。
+  【新手提示】这串 <script> 放在 </body> 之前而不是 <head> 里，
+  是为了让上面的 DOM 全部就位后再执行 JS：否则 JS 想抓 #hud 时
+  那些元素还没"出生"，查回来全是 null。
+  ============================================================
+-->
 <script src="js/config.js"></script>
 <script src="js/data/people.js"></script>
 <script src="js/data/items.js"></script>

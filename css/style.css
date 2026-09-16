@@ -2,6 +2,32 @@
    实验史记·春秋笔 — 样式
    Apple 风格：系统字体、玻璃材质、即时按压反馈、按尺寸调字距
    ============================================================ */
+/* ============================================================
+   【这份文件是干嘛的】
+   CSS（层叠样式表）管的是"长什么样"：颜色、字体、圆角、阴影、
+   动画全写在这里，HTML（index.html）只提供骨架。选择器（写在
+   { } 前面的部分）负责"点名"要打扮哪些元素：
+     · #hud    井号开头 = 按 id 找，全页唯一的一个元素；
+     · .glass  点号开头 = 按 class 找，可同时命中很多元素；
+     · body.theme-night = 标签名 + class 组合，夜间模式的 body。
+   【文件地图】（自上而下）
+     1. 设计变量与昼夜两套主题
+     2. 全局重置与 .hidden 开关
+     3. 通用零件：按钮家族、玻璃卡
+     4. 标题页
+     5. 游戏主界面：画布、HUD、见闻栏、地点条、交互条
+     6. 底部抽屉面板及其内容（卷目/图鉴/成就/设置）
+     7. 对话层
+     8. 章节转场卡、Toast 通知
+     9. 撰史界面、小游戏层、任务指引卡
+    10. 马刀战场覆盖层（占文件后半的最大一块）
+   ============================================================ */
+/* ---------- 设计变量 ----------
+   :root 指文档根元素，这里定义的"--开头的自定义属性"（变量）
+   全页可用，用 var(--名字) 引用。好处：改一处、全站生效。
+   常用几组：纸墨色 paper/ink、朱砂红 cinnabar、金 gold、玉绿 jade、
+   玻璃底色 glass、圆角半径 r-s/m/l、UI 黑体 font-ui 与古风宋体
+   font-cl、--blur 是毛玻璃的模糊配方。 */
 :root {
   --paper: #f6f3ea;
   --paper-2: #efe9db;
@@ -22,6 +48,8 @@
   --font-cl: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
   --blur: blur(22px) saturate(160%);
 }
+/* 夜间主题：body 挂上 .theme-night 类时，把上面那批变量整体换成
+   深色值。因为所有颜色都走 var() 引用，只改变量即可全局换肤。 */
 body.theme-night {
   --paper: #23211c;
   --paper-2: #2c2921;
@@ -33,6 +61,11 @@ body.theme-night {
   --shadow-1: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.35);
   --shadow-2: 0 2px 6px rgba(0,0,0,.4), 0 14px 40px rgba(0,0,0,.5);
 }
+/* 全局重置与基线：* 选中所有元素，清掉浏览器默认边距；
+   box-sizing:border-box 让"宽度"把内边距和边框也算进去，算尺寸
+   更直观。html/body 锁满屏并禁止页面滚动（整屏游戏不需要滚动条）。
+   .hidden 是全场最重要的工具类：display:none 直接把元素藏起来，
+   JS 靠增删这个类来切换界面，!important 保证它压过其他显示规则。 */
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; overflow: hidden; }
 body {
@@ -47,6 +80,10 @@ body {
 button { font: inherit; color: inherit; letter-spacing: inherit; }
 
 /* ---------- 通用按钮：按下即反馈 ---------- */
+/* 按钮家族：.btn 基础款（玻璃底、圆角，:active 即"被按住那一刻"
+   缩小变暗，制造按压手感）；.btn-primary 朱砂实色主按钮；
+   .btn-ghost 透明底幽灵款给次要操作；.btn-icon 34px 圆形小图标钮
+   （如面板右上角的 ✕）。 */
 .btn {
   appearance: none; border: 1px solid var(--glass-border);
   background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
@@ -72,6 +109,9 @@ button { font: inherit; color: inherit; letter-spacing: inherit; }
 .btn-icon:active { transform: scale(0.9); }
 
 /* ---------- 玻璃材质 ---------- */
+/* 毛玻璃卡：半透明底色 + backdrop-filter 模糊（把背后的画面糊化，
+   磨砂玻璃质感）+ 细白描边 + 柔和阴影。HUD、见闻栏、地点条、
+   交互条、任务卡全都挂 .glass，所以看起来像同一套器具。 */
 .glass {
   background: var(--glass);
   backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
@@ -81,6 +121,9 @@ button { font: inherit; color: inherit; letter-spacing: inherit; }
 }
 
 /* ============ 标题页 ============ */
+/* 标题页：.screen 铺满整窗；书名用 writing-mode:vertical-rl 竖排
+   （从上到下、从右往左），朱砂印章斜贴右上角；字号用 clamp()
+   随窗口高度伸缩，小屏也不挤。 */
 .screen { position: fixed; inset: 0; }
 #screen-title { overflow: hidden; background: var(--paper); }
 .title-bg {
@@ -121,6 +164,10 @@ button { font: inherit; color: inherit; letter-spacing: inherit; }
 .title-foot { position: absolute; bottom: 3vh; color: var(--ink-3); font-size: 12.5px; letter-spacing: .12em; }
 
 /* ============ HUD ============ */
+/* 游戏主界面：#world 画布铺满垫底，#hud 状态条浮在顶部。
+   z-index 决定层级（数字大的盖住小的）；.hud-chip 是状态条里一枚枚
+   胶囊小牌；@keyframes bump 定义"放大跳一下"，数值变化时 JS 给
+   牌子加 .bump 类触发它。 */
 #screen-game { background: #dfe6da; }
 #world { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: default; }
 #hud {
@@ -153,6 +200,8 @@ button.hud-chip:active { transform: scale(0.94); }
 #hud-period { font-size: 11.5px; color: var(--ink-2); font-weight: 600; letter-spacing: .08em; }
 
 /* 今日风闻 */
+/* 游戏主界面右上/底部的三块悬浮小件，依次是：
+   见闻栏（右上角固定 230px 宽的纯展示播报）、地点导航、交互条。 */
 #hearsay {
   position: absolute; top: 72px; right: 12px; width: 230px;
   padding: 10px 12px; z-index: 15; border-radius: 16px;
@@ -164,6 +213,8 @@ button.hud-chip:active { transform: scale(0.94); }
 .hearsay-item .done { color: var(--jade); }
 
 /* 地点导航 */
+/* 底部地点条：一排可横向滑动的胶囊按钮，.here 表示当前所在地点
+   （墨色反白高亮）。 */
 #placelist {
   position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px;
   display: flex; gap: 6px; padding: 7px 9px; z-index: 20; max-width: calc(100vw - 24px);
@@ -181,6 +232,8 @@ body.theme-night .place-btn { background: rgba(255,255,255,.08); }
 .place-btn.here { background: var(--ink); color: var(--paper); }
 
 /* 交互提示条 */
+/* 交互条：走到人物/设施旁才浮现的动作按钮排（按钮由 JS 现造）；
+   .accent 朱砂主按钮、.duel 红描边约战按钮。 */
 #ctxbar {
   position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);
   padding: 10px 14px; z-index: 25; border-radius: 16px;
@@ -201,6 +254,9 @@ body.theme-night .ctx-btn { background: rgba(255,255,255,.1); }
 .ctx-btn[disabled] { opacity: .4; pointer-events: none; }
 
 /* ============ 面板 Sheet ============ */
+/* 底部抽屉面板：index.html 里 #panel 那个全游戏共用的容器——
+   宽最高 860px、只有顶部两个圆角，像一张从屏幕底边升起的纸。
+   #scrim 是它身后的半透明黑遮罩（点遮罩即关闭）。 */
 #scrim { position: fixed; inset: 0; background: rgba(20,18,12,.35); z-index: 40; }
 #panel {
   position: fixed; left: 50%; bottom: 0; transform: translateX(-50%);
@@ -221,6 +277,9 @@ body.theme-night .sheet-head { border-bottom-color: rgba(255,255,255,.08); }
 .sheet-body { flex: 1; overflow-y: auto; padding: 16px 20px 30px; -webkit-overflow-scrolling: touch; }
 
 /* 面板内通用 */
+/* 面板内部的通用积木：.tabs 标签页胶囊、.card 白卡片、.pill 彩色
+   小徽章（jade/gold/gray 变体换色）、.seal-stamp 印章小方块。
+   图鉴/成就/系统/史记各界面都用这套零件拼装。 */
 .tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .tab {
   appearance: none; cursor: pointer; border: 1px solid transparent; border-radius: 999px;
@@ -251,6 +310,10 @@ body.theme-night .card { background: #2e2b23; border-color: rgba(255,255,255,.07
 }
 
 /* 史记卷目 */
+/* 接下来四段都是某个具体面板的内容样式：卷目（史记面板的目录行，
+   .vol-grade 评等徽章按品级换色，progress-bar 进度条）、
+   图鉴（人物卡网格）、成就（未达成半透明）、设置行（分段选择器
+   与存档文本框）。 */
 .vol-row {
   display: flex; align-items: center; gap: 14px; cursor: pointer;
   padding: 13px 16px; border-radius: 18px; background: #fffdf7;
@@ -308,6 +371,10 @@ textarea.savebox {
 }
 
 /* ============ 对话 ============ */
+/* 对话层：#dialog 铺满全屏但内容沉在底部；#dialog-cast 是舞台，
+   立绘由 JS 摆放，.dim 压暗不说话的角色；对话框用深色玻璃
+   （--glass-dark）；#dialog-text 打字中带 .typing 类，::after 在
+   句尾画一个闪烁光标；.choice-btn 是分支选项按钮。 */
 #dialog { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; justify-content: center; }
 #dialog-cast {
   position: absolute; left: 0; right: 0; top: 8vh; height: 46vh;
@@ -345,6 +412,8 @@ textarea.savebox {
 #dialog-next:active { transform: scale(0.88); }
 
 /* ============ 章节转场 ============ */
+/* 章节过场卡：黑底全屏，cc-title 竖排大字；@keyframes 定义动画
+   轨迹（ccIn 入场上浮、breathe 呼吸闪烁），由 animation 属性引用。 */
 #chapter-card {
   position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
   background: linear-gradient(180deg, #17150f, #241f14);
@@ -363,6 +432,8 @@ textarea.savebox {
 @keyframes breathe { 50% { opacity: .35; } }
 
 /* ============ Toast ============ */
+/* Toast 通知：从顶部飘下的小气泡（toastIn 落下入场），消失前 JS
+   加 .out 类淡出。容器 pointer-events:none，不挡下方点击。 */
 #toasts { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
 .toast {
   background: var(--glass-dark); color: #f3efe4; border: 1px solid rgba(255,255,255,.14);
@@ -375,6 +446,9 @@ textarea.savebox {
 .toast.out { opacity: 0; transform: translateY(-10px); transition: all .3s ease; }
 
 /* 撰史界面 */
+/* 撰史面板的内容：左栏 .slot-row 四条虚线"槽位"（把右侧碎片仓库
+   .shard-pool 里的 .shard-card 填进去；.hot 表示当前选中槽），
+   .writ-verdict 是成稿后的评等大字。 */
 .writ-grid { display: grid; grid-template-columns: 1fr 300px; gap: 16px; }
 @media (max-width: 760px) { .writ-grid { grid-template-columns: 1fr; } }
 .slot-row { display: flex; flex-direction: column; gap: 8px; }
@@ -413,11 +487,14 @@ body.theme-night .shard-card { background: #2e2b23; border-color: rgba(255,255,2
 @keyframes gradeIn { from { opacity: 0; transform: scale(1.8) rotate(-6deg); } }
 
 /* 小游戏覆盖层 */
+/* 小游戏层：暗幕中央一块独立画布，#mg-hud 分数条悬浮在画布上方。 */
 #minigame { position: fixed; inset: 0; z-index: 70; background: rgba(20,18,12,.72); display: grid; place-items: center; }
 #mg-canvas { border-radius: 22px; box-shadow: var(--shadow-2); max-width: 100vw; max-height: 100vh; }
 #mg-hud { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); padding: 8px 18px; z-index: 72; font-size: 14px; font-weight: 700; }
 
 /* 任务指引卡 */
+/* 右上角任务卡：qc-tag 主线徽章、qc-sides 支线区，内容全由
+   js/quests.js 动态生成，这里只管长相。 */
 #questcard {
   position: absolute; top: 206px; right: 12px; width: 252px;
   max-height: 46vh; overflow-y: auto; padding: 11px 13px; z-index: 15; border-radius: 16px;
@@ -439,6 +516,8 @@ body.theme-night .shard-card { background: #2e2b23; border-color: rgba(255,255,2
 #questcard .qc-side .qc-btn { margin-top: 2px; font-size: 11px; padding: 3px 9px; }
 
 /* 减少动效 */
+/* 无障碍与小屏适配：系统开了"减少动态效果"就把所有动画压到近零；
+   窄屏（640px 以下）藏起见闻栏、收紧 HUD 字号与间距。 */
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01s !important; transition-duration: .01s !important; }
 }
@@ -452,6 +531,10 @@ body.theme-night .shard-card { background: #2e2b23; border-color: rgba(255,255,2
 /* ============================================================
    马刀战场覆盖层（战棋）
    ============================================================ */
+/* 战场整体：开战时全屏盖住世界的"棋盘房间"，纸纹底与标题页同款。
+   #battle-stage 居中限宽；.btl-top 顶栏（标题/回合数/工具按钮）；
+   #battle-wrap 分左右两栏（棋盘+操作 / 敌军+战报），窄屏时叠为
+   上下两栏（见文件末尾的媒体查询）。 */
 #battle {
   position: fixed; inset: 0; z-index: 65;
   background:
@@ -477,6 +560,13 @@ body.theme-night #battle { background: radial-gradient(1100px 560px at 78% -12%,
 #battle-wrap { display: flex; gap: 14px; align-items: flex-start; flex: 1; min-height: 0; flex-wrap: wrap; }
 #battle-left { flex: 1 1 600px; min-width: 300px; display: flex; flex-direction: column; gap: 10px; }
 #battle-right { flex: 1 1 280px; min-width: 250px; display: flex; flex-direction: column; gap: 10px; max-height: 100%; }
+/* 左栏细部：#battle-canvas 棋盘画布（JS 每帧手绘格子与棋子）；
+   .phase-banner "我方/敌方回合"横幅浮在画布中央，.on 类控制显隐；
+   .tokenface 圆形棋子头像；#player-card 玩家状态卡（.critical 时
+   criticalPulse 红光脉冲告警；血条三层：hpbar-ghost 白色残影慢半拍
+   追赶、hpbar-in 绿色真实血量、hpbar-tx 数字，低于三成变 .low 红）；
+   .ap-pips 行动点小圆点（.on 点亮）；.actbar 行动按钮排，
+   .armed 描红边表示"已选中该指令"。 */
 #canvas-outer { position: relative; }
 #battle-canvas {
   width: 100%; max-width: 672px; height: auto; display: block;
@@ -535,6 +625,9 @@ body.theme-night #battle { background: radial-gradient(1100px 560px at 78% -12%,
 #rare-chips .rare-chip:active { transform: scale(0.94); }
 #rare-chips .rare-chip.on { background: linear-gradient(180deg,#b8912f,#8a6a1a); color: #fff8f2; border-color: transparent; }
 
+/* 右栏：#rare-chips 稀有刀卡切换胶囊（.on 金底表示已选中）；
+   #enemy-panel 敌军一览（.enemy-row 一人一行，.dead 半透明划线）；
+   #battle-log 滚动战报（.em 朱砂强调、.sys 金色系统行）。 */
 #enemy-panel, #log-panel {
   background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
   border: 1px solid var(--glass-border); border-radius: 16px; padding: 10px 12px; box-shadow: var(--shadow-1);
@@ -554,6 +647,8 @@ body.theme-night #battle { background: radial-gradient(1100px 560px at 78% -12%,
 #battle-log .sys { color: var(--gold); }
 
 /* 结算 */
+/* 结算页：.result-seal 大印章旋转盖下（stamp 动画，胜朱红、
+   .lose 灰），正文与按钮全由 JS 塞进 #result-body。 */
 #battle-result { flex: 1; display: grid; place-items: center; padding: 20px; overflow-y: auto; }
 .result-seal {
   width: 128px; height: 128px; font-family: var(--font-cl); font-size: 76px; font-weight: 900;
@@ -571,6 +666,9 @@ body.theme-night #battle { background: radial-gradient(1100px 560px at 78% -12%,
 #result-body .btnrow { display: flex; gap: 12px; justify-content: center; margin-top: 20px; }
 
 /* 战斗弹层（猜拳/对话/增益） */
+/* 战斗中的临时弹窗：#modal-mask 暗幕（.on 才显示）、#modal-box
+   白卡居中；rps-* 是战前猜拳按钮组、boon-btns 是波次间增益
+   三选一、dlg-* 是战斗内人物插话。 */
 #modal-mask {
   position: fixed; inset: 0; background: rgba(28,26,22,.55); z-index: 75;
   display: none; align-items: center; justify-content: center; backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
@@ -622,6 +720,8 @@ body.theme-night #battle { background: radial-gradient(1100px 560px at 78% -12%,
 @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(4px); } }
 .dlg #dlg-skip { position: absolute; top: 0; right: 0; }
 
+/* 悬停小提示框：战场上悬停格子/按钮时，JS 把说明写进来并挪到
+   指针旁，平时 display:none。 */
 #tooltip {
   position: fixed; z-index: 98; pointer-events: none; display: none;
   background: rgba(28,26,22,.94); color: #f3ead6; padding: 9px 13px; border-radius: 12px;
@@ -629,6 +729,8 @@ body.theme-night #battle { background: radial-gradient(1100px 560px at 78% -12%,
 }
 #tooltip .tt-n { color: #ffd98a; font-size: 14.5px; font-weight: 700; }
 
+/* 窄屏适配（860px 以下）：战场左右栏改上下叠放，战报压矮、
+   标题与按钮收紧。 */
 @media (max-width: 860px) {
   #battle-wrap { flex-direction: column; }
   #battle-log { height: 170px; }

@@ -1,8 +1,43 @@
-/* 实验史记·春秋笔 —— 主线流程：章节 / 交互 / 晚自习 / 终章 */
+/* 实验史记·马刀行 —— 世界流程总指挥：开卷/日常/任务接战/章节/终章
+   （战斗胶水——约战/结算钩子/锦标赛/试炼/生存——已拆至 js/duels.js） */
+/* ================================================================
+   【这个文件是干嘛的】
+   校园生活的"总指挥"：开卷时选难度与养成模式；世界里的一切日常
+   交互（交谈/赠礼/采访/名场面/读书听课/歇一日）都在这里处理；任务
+   的「接战」入口、章节里程碑卡、终章（高考·毕业·AI 读史）也归它。
+   与"战斗"有关的部分只剩转发起跳——真正的约战与结算在 js/duels.js。
+
+   【架构位置】
+   index.html 里最后一个加载的 script（它依赖前面所有人）。向下调
+   World（画布）/UI（面板）/Dialog（对话）/Quests（任务）/Blades（刀谱）
+   /Engine（状态机）/Duels（战斗胶水，js/duels.js）；向上被 World 的
+   回调（onNPC/onEvent/onCtxChange）驱动。读档后先过 normalizeG()
+   补齐新增字段，老档才能直接玩。
+
+   【暴露的全局名】
+   Main（boot / onNPC / onEvent / afterDialog / updateCtx / onQuest /
+   panelQuests / panelBlades / finale / rest / pickDifficulty /
+   showChapterCard / normalizeG…）。return 里的 challenge/startTournament/
+   startSurvival/startTrial 等只是转发到 Duels 同名接口的"兼容薄包装"。
+
+   【新手阅读提示】
+   1) 理解全项目的钥匙是"一次约战的完整旅程"：交互条「来呀来呀」或
+      任务卡「前往」→ Main.onQuest 播战前剧情 → Quests.pickAndStart /
+      Duels.challenge 组配置开战（js/duels.js）→ 引擎算 → 结算钩子
+      SJI_BATTLE_HOOKS（也在 duels.js）→ onDone 回世界。本文件负责
+      这条链的头和尾，中段全在 duels.js。
+   2) 本文件是 IIFE 模块 + 顶层 const Main（不挂 window，跨文件用裸名
+      + typeof 判活；详见 config.js / blades.js 的头注释）。
+   3) 界面代码的套路高度一致：el() 造元素 → innerHTML 填卡片 →
+      onclick 挂行为 → appendChild 上树。看懂 panelQuests 一个，
+      其余面板全都一个模子。
+   ================================================================ */
 'use strict';
 
 const Main = (() => {
   /* ---------- 存档兼容：补齐马刀行新增字段 ---------- */
+  /* 老档升级的统一入口：缺什么补什么、绝不改动已有值——这样旧玩家
+     的进度永远安全。每加一个新存档字段，就在这里补一行默认值。 */
   function normalizeG() {
     if (G.wins == null) G.wins = 0;
     if (G.duelsLost == null) G.duelsLost = 0;
@@ -29,6 +64,8 @@ const Main = (() => {
   }
 
   /* ---------- 任务：接战 / 完成回流 ---------- */
+  /* 任务接战的统一入口（任务卡「前往」和世界「令」气泡都会走到这）。
+     流程：清残留对话 → 没走到就先走近 → 播战前剧情 → 开战。 */
   function onQuest(q) {
     if (!q || window.BATTLE_ACTIVE) return;
     if (Dialog.active) Dialog.forceFinish();   // 清掉残留对话（战后幕等）
@@ -36,20 +73,25 @@ const Main = (() => {
     const onMap = Quests.markers().some(m => m.q.id === q.id);
     const pos = onMap ? Quests.walkPosOf(q.id) : [q.pos[0], q.pos[1]];
     const [px, py] = World.playerPos;
+    /* 离任务点太远（>90px）先走过去——"先走近再办事"的项目惯例 */
     if (Math.hypot(pos[0] - px, pos[1] - py) > 90) { World.walkTo(pos[0], pos[1] + 40); return; }
     const isMain = Quests.current() && Quests.current().id === q.id;
     /* 专属战前剧情；缺数据时退回通用脚本 */
     const script = Quests.preScript(q) || Quests.fallbackPre(q, isMain);
+    /* Dialog.play 的第二参是"播完回调"——剧情放完才真正开战 */
     Dialog.play(script, () => Quests.pickAndStart(q));
   }
 
+  /* 任务面板：主线（按章节解锁）与支线（按条件解锁）两张清单 */
   function panelQuests() {
     UI.openPanel('任务 · 马刀行', body => {
       const cur = Quests.current();
       const mul = DIFF_BY_V[Quests.diffV()];
+      /* 顶卡：当前难度与赏格倍率（难度随时可改，是全局乘数） */
       body.appendChild(el('div', 'card', `<h3>当前难度：${mul.n} <span class="pill gold">赏格 ×${mul.mul}</span></h3>
         <div class="meta">${mul.tip}　·　可在「系统 · 设置」中随时更改</div>`));
       body.appendChild(el('div', 'muted', '<div style="height:10px"></div>主线 · 马刀兴亡史（每节皆高难关卡）：'));
+      /* 主线清单：need() 返回 false 的章节还没解锁（灰显） */
       Quests.mainList().forEach(q => {
         const done = Quests.done(q.id); const open = q.need ? q.need() : true;
         const c = el('div', 'card');
@@ -58,12 +100,14 @@ const Main = (() => {
           <div class="meta">${q.goal}　·　${q.hint}</div></div>`;
         const b = el('button', 'btn' + (open && !done ? ' btn-primary' : ''), done ? '已成' : '前往');
         b.style.padding = '7px 13px';
+        /* 「前往」= 先切场景再自动接战（setTimeout 150ms 等场景切换完成） */
         if (done) b.disabled = true;
         else b.onclick = () => { UI.closePanel(); const sc = SCENE_BY_ID[q.where]; if (World.sceneId !== q.where) World.travel(q.where); setTimeout(() => onQuest(q), 150); };
         c.appendChild(b);
         body.appendChild(c);
       });
       body.appendChild(el('div', 'muted', '<div style="height:12px"></div>支线 · 满足条件可接（完成即解锁强力人物或永久效果）：'));
+      /* 支线清单：cond() 是解锁条件的布尔函数，condHint 是未达标时的提示文案 */
       Quests.sideList().forEach(q => {
         const done = Quests.done(q.id); const open = q.cond();
         const c = el('div', 'card');
@@ -82,12 +126,15 @@ const Main = (() => {
 
   /* ---------- 马刀：约战 / 结算 ---------- */
   /* 首败即首战：角色 → 马刀风云剧本卷（战前/战胜/战败台词自动接上） */
+  /* 刀谱面板：称号/养成加成/修炼购买/身怀之技/稀有刀卡开关/录技切换。
+     全部每次打开时按当前 G 现算——"整体重画"惯用法，状态与界面永不脱节 */
   function panelBlades() {
-    Blades.registerChar();
+    Blades.registerChar();   // 先按最新成长重算主角战斗卡，面板数据才不会旧
     UI.openPanel('刀谱 · 马刀行', body => {
       const w = G.wins || 0;
       const eqId = Blades.equippedSkillId();
       const eqSk = eqId ? Blades.skillCardOf(eqId) : null;
+      /* 顶卡：段位/战绩/养成状态一览 */
       body.appendChild(el('div', 'card', `
         <h3>称号：${Blades.rankName()} <span class="pill gold">胜 ${w} 场</span>${G.duelsLost ? `<span class="pill gray">败 ${G.duelsLost}</span>` : ''}<span class="pill ${G.cultivation ? 'jade' : 'gray'}" style="margin-left:5px">${G.cultivation ? '养成模式' : '纯白板'}</span></h3>
         <div class="meta">${G.cultivation
@@ -108,6 +155,7 @@ const Main = (() => {
             <div class="meta">${u.desc}${maxed ? ' · 已臻化境' : ` · 花费 ◉${cost}`}</div></div>`;
           const b = el('button', 'btn' + (maxed ? '' : ' btn-primary'), maxed ? '已成' : '修炼');
           b.style.padding = '8px 14px';
+          /* 买完关面板立刻重开——借"整体重画"刷新等级显示 */
           if (maxed) b.disabled = true;
           else b.onclick = () => { if (Blades.buyUpgrade(u.id)) { UI.closePanel(); panelBlades(); } };
           c.appendChild(b);
@@ -136,6 +184,7 @@ const Main = (() => {
           const c = el('div', 'card');
           c.style.cssText = 'display:flex;align-items:center;gap:12px';
           c.innerHTML = `<div style="flex:1"><h3 style="margin:0">「${rw.name}」<span class="pill ${on ? 'jade' : 'gray'}">${on ? '生效中' : '已封存'}</span></h3><div class="meta">${rw.desc}</div></div>`;
+          /* 战斗外切换：battle 传 null，只改存档（战场上还有同款开关） */
           const b = el('button', 'btn' + (on ? '' : ' btn-primary'), on ? '收回' : '启用');
           b.style.padding = '8px 14px';
           b.onclick = (e) => { e.stopPropagation(); Blades.toggleRare(null, bid); toast(Blades.isRareOn(bid) ? `启用「${rw.name}」` : `收回「${rw.name}」`, '谱'); UI.closePanel(); panelBlades(); };
@@ -178,9 +227,10 @@ const Main = (() => {
     let cult = false;   // 养成模式：默认关
     UI.openPanel('择难度 · 新的史官', body => {
       body.appendChild(el('div', 'muted', '主线皆高难关卡。难度只改敌方强度与赏格，不改剧情；开卷后仍可在「系统 · 设置」随时更改。'));
-      /* 养成模式开关（可选） */
+      /* 养成模式开关（可选）：开=段位+修炼给数值，关=纯白板 */
       const cultRow = el('div', 'card');
       const renderCult = () => {
+        /* 点"开/关"只改 cult 变量再整行重画——状态放闭包里，界面跟着重渲染 */
         cultRow.innerHTML = `<div style="flex:1"><h3 style="margin:0">养成模式 <span class="pill ${cult ? 'jade' : 'gray'}">${cult ? '开' : '关'}</span></h3>
           <div class="meta">开：胜场升段位（血上限/行动点加成）且可在刀谱花零花钱修炼；关：纯白板，全凭刀谱之技、身怀之技与稀有刀卡。</div></div>
           <div style="display:flex;gap:6px">
@@ -196,6 +246,7 @@ const Main = (() => {
       body.appendChild(cultRow);
       renderCult();
       body.appendChild(el('div', '', '<div style="height:10px"></div>'));
+      /* 难度清单：点卡片或点按钮都直接开卷 */
       DIFFS.forEach(d => {
         const c = el('div', 'card');
         c.style.cssText = 'display:flex;align-items:center;gap:12px;cursor:pointer';
@@ -211,10 +262,12 @@ const Main = (() => {
       body.appendChild(el('div', 'muted', '<div style="height:12px"></div>开卷后：世界自由来去；主线指引在右侧任务卡；走近「令」标记即可开战。'));
     });
   }
+  /* 真正开新档：记难度偏好 → 重建全局状态 G → 写档 → 落地开局 */
   function beginNewGame(diffV, cult) {
     if (window.SJI_SAVE && SJI_SAVE.setSetting) SJI_SAVE.setSetting('lastDiff', diffV);
     UI.closePanel();
     Sfx.tap();
+    /* newGameState() 造全新 G，normalizeG() 补齐字段——G 是 window 上的全局账本 */
     G = newGameState(); normalizeG();
     G.cultivation = !!cult;
     Save.write();
@@ -222,11 +275,13 @@ const Main = (() => {
     setTimeout(() => toast(G.cultivation ? '养成模式：胜场升段位，刀谱可修炼' : '纯白板模式：成长只凭刀谱之技、身怀之技与稀有刀卡', G.cultivation ? '炼' : '白'), 900);
   }
 
+  /* 标题页三键：开卷/继续/导入存档 */
   function bindTitle() {
     $('#btn-new').onclick = () => { Sfx.tap(); pickDifficulty(); };
     $('#btn-continue').onclick = () => {
       const s = Save.read();
       if (!s) { toast('还没有存档'); return; }
+      /* 读档 = 存档对象直接成为全局 G，再补齐新字段 */
       G = s; normalizeG(); Sfx.tap();
       $('#screen-title').classList.add('hidden');
       $('#screen-game').classList.remove('hidden');
@@ -234,6 +289,7 @@ const Main = (() => {
       World.enter(G.flags.lastScene || 'playground');
       enterPeriod(false);
       toast('继续上局', '史');
+      /* 老档迁移提示只弹一次（flags 是"取完即清"的一次性标记） */
       if (G.flags.legacyMigrated) {
         G.flags.legacyMigrated = false; Save.write();
         setTimeout(() => toast('旧档已并入刀史：主线九节从头接起，此前的胜场、刀谱与进度皆保留', '迁'), 900);
@@ -245,6 +301,7 @@ const Main = (() => {
         body.appendChild(ta);
         const b = el('button', 'btn btn-primary', '导入');
         b.style.marginTop = '8px';
+        /* 导入成功直接刷新页面重载新档，失败弹提示不崩 */
         b.onclick = () => {
           try { Save.import(ta.value); location.reload(); }
           catch (e) { toast('存档格式不对'); }
@@ -252,11 +309,14 @@ const Main = (() => {
         body.appendChild(b);
       });
     };
+    /* 没有存档就藏起「继续上局」 */
     const has = !!Save.read();
     $('#btn-continue').classList.toggle('hidden', !has);
   }
 
   /* ---------- 章节卡 ---------- */
+  /* 章节里程碑卡：全屏一闪的转场卡。点击或超时都算看完——fired 旗子
+     保证回调只跑一次（幂等），这是"收尾不能赌动画"的轻量版兜底 */
   function showChapterCard(def, cb) {
     const card = $('#chapter-card');
     $('#cc-date').textContent = def.date;
@@ -274,6 +334,7 @@ const Main = (() => {
     setTimeout(done, G.settings.motion === 'off' ? 1200 : 3000);
   }
 
+  /* 进章节：新档直接落地主线首节（开局即主线），续档才放章节转场卡 */
   function startChapter(isNew) {
     const def = CHAPTERS[G.ch] || CHAPTERS[0];
     $('#screen-title').classList.add('hidden');
@@ -293,6 +354,7 @@ const Main = (() => {
   }
 
   /* ---------- 序章 ---------- */
+  /* 开局四连提示：用定时错开的 toast 把基本玩法讲完（比教学弹窗轻） */
   function prologue() {
     toast('点击地面移动 · 走近带「令」的标记，接主线', '引');
     setTimeout(() => toast('右侧任务卡写有当前主线与可接支线 · 点「前往」直达', '令'), 1600);
@@ -302,6 +364,7 @@ const Main = (() => {
   }
 
   /* ---------- 日子流转（自由世界：随时可歇，不再是「下一时段」） ---------- */
+  /* 每次进新时段/新一天都全量刷新一遍 HUD/地点/风闻/任务/世界 */
   function enterPeriod(changed) {
     UI.updateHUD();
     UI.renderPlaces();
@@ -313,7 +376,9 @@ const Main = (() => {
   }
   /* 歇一日：写日记 / 夜谈 / 直接睡 —— 全都免费，行动点不再门控探索 */
   function rest() {
+    /* 有对话/小游戏/战斗/面板开着时不响应（互斥守卫） */
     if (Dialog.active || MG.active || window.BATTLE_ACTIVE || UI.panelOpen) return;
+    /* choice 步骤：Dialog.play 支持选项分支，每个选项的 run() 返回结果台词 */
     Dialog.play([
       { who: '旁白', text: `一日将尽（${Engine.dateLabel()}）。` },
       { choice: [
@@ -322,6 +387,7 @@ const Main = (() => {
             return { say: { who: '旁白', text: '今日所见尽落纸上。文笔 +3。' } };
         } },
         { t: '找人夜谈 · 好感 +2', fx: '卧谈会', run() {
+            /* 从见过面的人里随机挑一个加好感 */
             const met = G.flags.metPeople.filter(id => PEOPLE_BY_ID[id]);
             if (met.length) {
               const id = pick(met);
@@ -336,6 +402,7 @@ const Main = (() => {
         } },
       ] },
     ], () => {
+      /* 全部选项播完的收尾：日子+1，全量刷新 */
       Engine.nextDay();
       UI.updateHUD(); UI.renderPlaces(); UI.renderHearsay(); World.refresh(); Quests.render(); Save.write();
       toast(Engine.dateLabel(), '日');
@@ -343,6 +410,9 @@ const Main = (() => {
   }
 
   /* ---------- 交互条 ---------- */
+  /* 底部交互条：World 每次探测到"走近了什么"就调这里重画。
+     near 是 {type:'quest'|'npc'|'event'|'door', …}；没有 near 但场景
+     有专属动作时也显示（读书/听课/购物/协会等）。 */
   function updateCtx(near) {
     const bar = $('#ctxbar');
     bar.innerHTML = '';
@@ -354,6 +424,7 @@ const Main = (() => {
       || World.sceneId === 'classroom6' || World.sceneId === 'classroom7';
     if (!near && !hasSceneAct) return;
     if (near) bar.classList.remove('hidden');
+    /* 任务点：显示敌阵预告，点击走 onQuest 流程（战前剧情→开战） */
     if (near && near.type === 'quest') {
       bar.classList.remove('hidden');
       const q = near.q;
@@ -362,6 +433,7 @@ const Main = (() => {
       b.onclick = () => onQuest(q);
       bar.appendChild(b);
     } else if (near && near.type === 'npc') {
+      /* NPC：交谈/赠礼/采访/约战四件套（约战按钮只在会马刀的人身上出现） */
       const p = near.p;
       const fav = Engine.favorOf(p.id);
       const head = el('span', 'ctx-name', p.hao || p.name);
@@ -385,18 +457,20 @@ const Main = (() => {
         iv.onclick = () => interview(p);
         bar.appendChild(iv);
       }
-      // 约战（会马刀的人）
+      // 约战（会马刀的人）——真正开战逻辑在 js/duels.js 的 Duels.challenge
       if (window.SJI_DATA && SJI_DATA.CHARACTERS[p.id]) {
         const duelBtn = el('button', 'ctx-btn duel', '来呀来呀 · 约战');
         duelBtn.onclick = () => Duels.challenge(p);
         bar.appendChild(duelBtn);
       }
     } else if (near && near.type === 'event') {
+      /* 名场面：旁观亲历，播事件脚本 */
       bar.appendChild(el('span', 'ctx-name', '「' + near.ev.name + '」'));
       const b = el('button', 'ctx-btn accent', '旁观亲历');
       b.onclick = () => playEvent(near.ev);
       bar.appendChild(b);
     } else if (near && near.type === 'door') {
+      /* 门/传送点：直接切场景 */
       const b = el('button', 'ctx-btn', '进入 · ' + near.door.label);
       b.onclick = () => World.travel(near.door.to);
       bar.appendChild(b);
@@ -423,6 +497,7 @@ const Main = (() => {
       b.onclick = () => UI.panelShop();
       bar.appendChild(b);
     }
+    /* 操场在协会成立（G.ch≥8）后长出三个战斗入口——全都转发到 Duels */
     if (World.sceneId === 'playground' && G.ch >= 8) {
       const clubOn = !!G.flags.xiehui;
       const t = el('button', 'ctx-btn' + (clubOn ? ' duel' : ''), clubOn ? '协会锦标赛' : '协会未立（推进主线至协会开张）');
@@ -439,6 +514,7 @@ const Main = (() => {
       bar.appendChild(s);
     }
     if (World.sceneId === 'pingpong') {
+      /* 小游戏：MG.launch(名字, 结算回调)——赢了拿文笔/零花钱/图鉴碎片 */
       const b = el('button', 'ctx-btn', '打乒乓球');
       b.onclick = () => {
         MG.launch('pingpong', ok => {
@@ -454,22 +530,27 @@ const Main = (() => {
   }
 
   /* ---------- 马刀协会：锦标赛与生存（操场 · 协会立后开放） ---------- */
+  /* 任何"一次行为"结束后的统一收尾：刷 HUD/风闻/世界/任务 + 存档 */
   function afterAction() {
     UI.updateHUD(); UI.renderHearsay(); World.refresh(); Quests.render(); Save.write();
   }
 
   /* ---------- 行为 ---------- */
+  /* 交谈：每天前 2 次免费，之后要花行动点；首次交谈算"结识" */
   function chat(p) {
     if (G.chatCount >= 2 && !Engine.spendAP(1)) return;
     G.chatCount++;
     G.stats.chats++;
     if (!G.flags.metPeople.includes(p.id)) { G.flags.metPeople.push(p.id); toast(`结识「${p.name}${p.hao ? ' · ' + p.hao : ''}」`, '识'); }
     const first = G.stats.chats === 1;
+    /* 首次聊天连招呼语一起进随机池；pick() 是 config.js 的随机取一 */
     const line = pick(first ? p.greet.concat(p.chat) : p.chat);
     Engine.addFavor(p.id, 1);
+    /* 巡查风险：掷骰失败会被逮住（caughtPlay 播被抓小剧场） */
     if (Engine.riskCheck()) { Engine.caughtPlay(() => afterAction()); return; }
     Dialog.play([{ who: p.hao || p.name, text: line }], afterAction);
   }
+  /* 赠礼第一步：列出行囊里的道具，标出对方的爱/喜欢 */
   function giftPick(p) {
     const ids = Object.keys(G.bag).filter(k => G.bag[k] > 0);
     if (!ids.length) { toast('行囊空空——去小卖部买点礼物', '囊'); UI.panelShop(); return; }
@@ -489,6 +570,7 @@ const Main = (() => {
       });
     });
   }
+  /* 赠礼结算：心头好 +12 / 喜欢 +6 / 普通 +2 好感，附专属反应台词 */
   function doGift(p, id) {
     G.bag[id]--;
     G.giftToday[p.id] = 1;
@@ -502,12 +584,14 @@ const Main = (() => {
     UI.closePanel();
     Dialog.play([{ who: p.hao || p.name, text: love ? `（眼睛一亮）此物……汝如何知吾所好？善！大善！` : like ? '（收下，端详片刻）有心了。' : '（收下）……多谢。' }], afterAction);
   }
+  /* 采访：耗行动点，拿图鉴碎片 + 好感，播专属采访稿 */
   function interview(p) {
     if (!Engine.spendAP(1)) return;
     Engine.grantShard(p.interview.give, 'interview');
     Engine.addFavor(p.id, 5);
     Dialog.play(p.interview.script, afterAction);
   }
+  /* 名场面：播事件脚本，收尾记账（完成列表/开新去处/碎片/成就/好感） */
   function playEvent(ev) {
     Dialog.play(ev.script, () => {
       G.doneEvents.push(ev.id);
@@ -518,6 +602,7 @@ const Main = (() => {
         toast('亲历名场面，当事诸人好感 +2', '记');
       }
       if (ev.id === 'ev_shuban') Engine.award('ach_shuban');
+      /* 事件里可以内嵌小游戏（script 中带 mg 步骤）；结果记录在步骤对象上 */
       const mgStep = ev.script.find(s => s.mg);
       const mgOk = mgStep ? mgStep._mgResult !== false : true;
       if (ev.shard) {
@@ -533,11 +618,13 @@ const Main = (() => {
       afterAction();
     });
   }
+  /* 听课：文笔+2；22% 概率触发随堂提问小剧场（答对声望+2，答错-1） */
   function listenClass() {
     if (!Engine.spendAP(1)) return;
     Engine.addWen(2); G.stats.listened++;
     if (G.stats.listened >= 10) Engine.award('ach_listen');
     if (Math.random() < 0.22) {
+      /* 两个教室各自的"授课教师池"，随机请一位出场 */
       const t = World.sceneId === 'classroom6'
         ? ['zouyu', 'shibo', 'weirong'] : ['shenren', 'xiannv', 'touge'];
       const who = pick(t);
@@ -557,6 +644,7 @@ const Main = (() => {
     afterAction();
   }
   /* ---------- 世界回调 ---------- */  function onCtxChange(near) { updateCtx(near); }
+  /* World 探测到玩家点了 NPC：先走近（>80px 就走过去），到了再弹交互条 */
   function onNPC(p) {
     if (Dialog.active || MG.active) return;
     const pos = World.npcPos(p.id);
@@ -566,15 +654,18 @@ const Main = (() => {
     }
     updateCtx({ type:'npc', p });
   }
+  /* World 探测到玩家点了名场面标记：同样是"先走近再办事" */
   function onEvent(ev) {
     if (Dialog.active || MG.active) return;
     const [px, py] = World.playerPos;
     if (Math.hypot(ev.pos[0] - px, ev.pos[1] - py) > 80) { World.walkTo(ev.pos[0], ev.pos[1] + 30); return; }
     playEvent(ev);
   }
+  /* Dialog 播完任何脚本的统一收尾（World.refresh 让 NPC 重新流动） */
   function afterDialog() { UI.updateHUD(); UI.renderHearsay(); World.refresh(); Quests.render(); Save.write(); }
 
   /* ---------- 终章：高考 · 毕业 · AI ---------- */
+  /* 终章第一幕：高考考场（主线 m9 通关后由 duels.js 的终章收尾调来） */
   function finale() {
     showChapterCard(CHAPTERS[16], () => {
       World.enter('gate');
@@ -593,6 +684,7 @@ const Main = (() => {
       ], () => graduation());
     });
   }
+  /* 毕业册：全员去向一览（立过传/见过面的人才有"远方"文案） */
   function graduation() {
     const all = PEOPLE.concat(PEOPLE_WAI);
     UI.openPanel('毕业 · 诸君去向', body => {
@@ -612,20 +704,24 @@ const Main = (() => {
       body.appendChild(b);
     });
   }
+  /* 真·结局：AI 读史。按立传数/笔风/好感/声望/胜场现场拼出"AI 评语"
+     ——全是模板字符串计算出来的，不是固定结局贴图 */
   function aiEpilogue() {
     Engine.award('ach_ai');
     const pub = Object.keys(G.vols).length;
     const avg = pub ? Object.values(G.vols).reduce((a, b) => a + b.grade, 0) / pub : 0;
+    /* 称号按立传数分档（写得多还人缘好才是太史公） */
     let title = '残卷 · 史未成而人已散';
     if (pub >= 6) title = '史官 · 有所记，有所失';
     if (pub >= 10) title = '良史 · 秉笔直书，温润如玉';
     if (pub >= 15) title = G.rep >= 60 ? '太史公 · 究天人之际，通古今之变' : '太史公（孤本）· 书成而友尽？';
+    /* 笔风 = 直笔/曲笔的统计对比（撰史时两种写法各自计数） */
     const styleLine = G.stats.direct > G.stats.curve * 2 ? '峻直' : G.stats.curve > G.stats.direct * 2 ? '敦厚' : '直曲相济';
     // 已立传诸人的平均好感
     const castIds = new Set();
     Object.keys(G.vols).forEach(no => VOL_BY_NO[no].cast.forEach(id => castIds.add(id)));
     const favAvg = castIds.size ? Math.round([...castIds].reduce((a, id) => a + Engine.favorOf(id), 0) / castIds.size) : 0;
-    // 马刀行结局变体
+    // 马刀行结局变体：胜场决定 AI 评语里"刀"的戏份
     const wins = G.wins || 0, cards = (G.blades && G.blades.cards || []).length;
     const rank = (typeof Blades !== 'undefined' && Blades.rankName()) || '未入册';
     let bladePara;
@@ -658,6 +754,7 @@ const Main = (() => {
   }
 
   /* ---------- 菜单面板 ---------- */
+  /* 系统菜单：六宫格入口。注意任务/刀谱两项是本文件的，其余借 UI 的 */
   function menuPanel() {
     UI.openPanel('系统', body => {
       const row = el('div', '');
@@ -681,11 +778,14 @@ const Main = (() => {
     $('#btn-menu').onclick = () => menuPanel();
   }
 
+  /* 启动：绑按钮 → 挂世界回调 → 给地点栏打个"补丁" → 开主循环 */
   function boot() {
     bindTitle();
     bindHUD();
     World.setOnCtx(onCtxChange);
     // 底部导航末位追加「歇一日」（自由世界：随时可推进日子，无时段门禁）
+    /* 猴子补丁（monkey patch）：不改 ui.js，包一层原函数往栏尾追加按钮——
+       "打补丁而不改源"的 JS 惯用法 */
     const orig = UI.renderPlaces;
     UI.renderPlaces = function () {
       orig();
@@ -697,6 +797,8 @@ const Main = (() => {
     World.start();
   }
 
+  /* 对外接口：challenge/startTournament 等一行箭头函数只是转发到 Duels
+     的兼容包装（老调用点不必改）；真正实现都在 js/duels.js */
   return { boot, onNPC, onEvent, afterDialog, updateCtx, onCtxChange,
            challenge: (p) => Duels.challenge(p),
            startDuel: (p) => { Duels.challenge(p); },
@@ -710,4 +812,5 @@ const Main = (() => {
            onQuest, panelQuests, finale, rest, pickDifficulty };
 })();
 
+/* main.js 是最后一个加载的脚本：DOM 就绪后一键启动整个游戏 */
 window.addEventListener('DOMContentLoaded', () => Main.boot());

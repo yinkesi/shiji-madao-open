@@ -3,26 +3,68 @@
  * 世界探索之上覆盖的马刀战棋：Canvas 渲染 / HUD / 猜拳 / 对话 / 结算。
  * 引擎（SJI_ENGINE）通过 window.SJI_UI 钩子与本模块通信。
  * ============================================================ */
+/* ============================================================
+ * 【新手导读】window.SJI_UI 的正式提供者 —— 战斗覆盖层
+ *
+ * 【这个文件是干嘛的】
+ * 一开打就全屏盖在校园画面上的「战场」界面：Canvas 棋盘渲染、血条按钮等 HUD、
+ * 猜拳弹窗、买刀买马、对话气泡、胜负结算。它只管「表现」（画画+收玩家输入），
+ * 不管规则（伤害怎么算、AI 怎么走都归引擎）。
+ *
+ * 【架构位置】三方分工与钩子契约：
+ *   · 引擎 js/battle/engine.js（window.SJI_ENGINE）：只算数不画画。它在开局/回合/
+ *     受伤等时机通过 window.SJI_UI.xxx(...) 钩子请本模块做表现，比如
+ *     SJI_UI.fxHit(谁, 几点) 弹飘字、await SJI_UI.rpsRound(battle) 弹猜拳框、
+ *     await SJI_UI.playerPhase(battle) 把操作权交给玩家（玩家点了「结束回合」，
+ *     这个 Promise 才算完成，引擎继续跑）。
+ *   · 世界侧 js/main.js：管校园探索。它调 SJI_UI.startBattle(cfg) 发起战斗；打完
+ *     后本模块反过来调世界侧备好的 window.SJI_BATTLE_HOOKS.onResult / onDone
+ *     （发奖励、存档、回校园）。window.BATTLE_ACTIVE=true 期间世界输入让位，
+ *     两边互不打架。
+ *   · 出身：原版《马刀风云》的 js/battle/ui.js（该文件已不被 index.html 加载，
+ *     仅留参考），本文件是它拆掉自有主菜单后改造成的「覆盖层」版本。
+ *
+ * 【暴露的全局名】
+ *   window.SJI_UI —— 对外接口，就是文件末尾 IIFE return 的那个对象；
+ *   window.SJI   —— 顺手建的全局命名空间，引擎靠 SJI.settings 读播放速度；
+ *   window.SJI_DEBUG —— 控制台调试工具（F12 里可直接干预战局）。
+ *
+ * 【新手阅读提示】
+ *   · 全文件是一个 IIFE（定义即执行的函数），中间的函数都是内部零件，外界只能用
+ *     return 出去的名字；各 <script> 按固定顺序共享全局作用域，没有 import/export。
+ *   · 大坑：别的文件顶层写 const X = ... 时 X 不会挂到 window 上，跨文件用裸名 X
+ *     前得 typeof X !== 'undefined' 判活（见 speakerOf 里对 PEOPLE_BY_ID 的防法）。
+ *   · 战场参数在 cfg.stage：hpScale=敌人血量倍率、restFull=波次间回满血、
+ *     blocked=障碍格坐标、terrain=障碍物画法（桌子/柜子/柱子…）。
+ * ============================================================ */
 window.SJI_UI = (function () {
   "use strict";
+  // 把常用命名空间抓成本地短名：D=剧本数据 E=战斗引擎 SAVE=存档 AU=战斗音效（index.html 已先行加载）。
   const D = window.SJI_DATA, E = window.SJI_ENGINE, SAVE = window.SJI_SAVE, AU = window.SJI_AUDIO;
+  // CFG=全局配置，GRID 是棋盘几何：TILE=每格边长、PAD=棋盘四周留白、CS=画布总边长。
   const CFG = window.SJI_CONFIG, GRID = CFG.GRID;
   const TILE = GRID.TILE, PAD = GRID.PAD, CS = GRID.CS;
 
+  /* ---------- 模块内部状态：外界碰不到，只能通过末尾 return 出去的方法间接读写 ---------- */
   let battle = null;
   let mode = null;            // null | 'knife' | 'horse' | 'skill'
   let hoverTile = null;
+  // floaters=头顶飘字（「-2」「+3」这类），banner=棋盘中央的大字提示；都是攒起来随帧老化消失。
   let floaters = [], banner = null;
+  // rafOn=requestAnimationFrame 动画循环的开关；bgCanvas=预绘好的背景图（见 buildBG）。
   let rafOn = false, bgCanvas = null;
   let onEndCb = null;         // 战斗结束回调（世界侧注入）
 
+  // 两个极简 DOM 工具：$ 取第一个匹配元素，$$ 取全部并展开成真数组（jQuery 风格惯用缩写）。
   const $ = s => document.querySelector(s);
   const $$ = s => [...document.querySelectorAll(s)];
 
   /* ---------------- 覆盖层 ---------------- */
+  /* ---------- 覆盖层开关：#battle 是 index.html 里盖在世界画面上的全屏 div ---------- */
   function showOverlay() {
     $("#battle").classList.remove("hidden");
     $("#battle").classList.add("on");
+    // 立全局旗子：世界侧见到 BATTLE_ACTIVE=true 就暂停自己的键盘鼠标响应，让位给战场。
     window.BATTLE_ACTIVE = true;
   }
   function hideOverlay() {
@@ -37,6 +79,8 @@ window.SJI_UI = (function () {
 
   /* 弹层串行化：猜拳 / 增益三选一 / 剧情对话共用 #modal-box */
   let modalChain = Promise.resolve();
+    // 弹层串行的核心：modalChain 当「队尾」，新弹层用 then 排在它后面，保证猜拳/三选一/
+    // 对话一个放完再放下一个。then(run, run)=前面的弹层无论正常关闭还是出错都接着排队。
   function queueModal(open) {
     const run = () => Promise.resolve().then(open);
     const p = modalChain.then(run, run);
@@ -44,6 +88,7 @@ window.SJI_UI = (function () {
     return p;
   }
 
+  // 打开通用弹窗：把 HTML 塞进 #modal-box、点亮遮罩。返回 box 是为了接下来往里绑按钮事件。
   function modal(html) {
     const mask = $("#modal-mask"), box = $("#modal-box");
     box.innerHTML = html;
@@ -53,11 +98,13 @@ window.SJI_UI = (function () {
   }
   function closeModal() { $("#modal-mask").classList.remove("on"); }
 
+  // 拼一小段 HTML：角色的「头像牌」（色块底+单字），用在弹窗说话人和敌人列表里。
   function face(ch, extraCls) {
     return '<span class="tokenface ' + (extraCls || "") + '" style="background:' + ch.color + '">' + ch.glyph + "</span>";
   }
 
   /* ---------------- 说话人解析（马刀剧本 + 世界人物通吃） ---------------- */
+  // 剧本对白里的中文缩写 → 世界侧角色 id 的对照表（作者写对白时可以偷懒只写一个字）。
   const SHORTHAND = {
     "史": "yinkesi", "大哥": "dage", "神人": "shenren", "神": "shenren", "仙女": "xiannv",
     "上": "hanxiao", "豪": "luhao", "铭": "shaoming", "慧": "xinhui", "问": "wonder",
@@ -67,7 +114,11 @@ window.SJI_UI = (function () {
     "展": "dazhan", "怡": "keai", "羚": "limo", "东": "xiangdong", "生": "mob",
     "翔": "shengxiang", "岳": "qiyue", "烨": "ziye", "奇": "lianqi",
   };
+  // 不在名册里的路人角色的兜底配色盘（speakerOf 里按 id 哈希取色）。
   const PALETTE = ["#a63a2b", "#4a6d9c", "#2e8b74", "#8c5a3c", "#7d4a6b", "#5a8c46", "#8f8f5c", "#555577"];
+  // 把「谁在说话」解析成 {名字, 称号, 单字头像, 颜色}：先查剧本缩写表，再查世界侧人物
+  // 表 PEOPLE_BY_ID / MINOR_FIGS。它们是别的文件顶层的 const、不挂 window，所以必须
+  // 用 typeof 判活——这就是本项目「跨文件裸名 + typeof 判活」的典型写法。
   function speakerOf(who) {
     const cid = SHORTHAND[who] || who;
     const ch = D.CHARACTERS[cid];
@@ -83,11 +134,16 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 开战 ---------------- */
+  // 世界侧调 SJI_UI.startBattle(cfg) 发起战斗：cfg 带敌人名单、难度、战场参数 cfg.stage、
+  // 开场对话 introScene 等。第二参 onEnd 本文件只存不用（重开时原样回传），真正
+  // 「打完回世界」走文件末尾的 SJI_BATTLE_HOOKS.onDone（见 onBattleEnd / showResult）。
   function startBattle(cfg, onEnd) {
     mode = null; floaters = []; banner = null;
     onEndCb = onEnd || null;
     Blades.registerChar();
+    // 规则与数值全在引擎的 Battle 类里；UI 只握住实例句柄，用来读数值、画画。
     battle = new E.Battle(cfg);
+    // 挂到全局命名空间：控制台调试器（SJI_DEBUG）与世界侧都能拿到当前战局。
     window.SJI.battle = battle;
     Blades.applyBoons(battle);
     $("#battle-title").textContent = cfg.title || "马刀场";
@@ -97,6 +153,8 @@ window.SJI_UI = (function () {
     updateAll();
     showScreenStage();
     showOverlay();
+    // 开场流程：先播开场对话（若有），再让引擎 run()。run 返回 Promise，过程中引擎会
+    // 反复回调本文件的钩子；catch 兜底：出错弹个 toast，页面不至于白屏崩掉。
     const boot = async () => {
       if (cfg.introScene) await showDialogue(cfg.introScene);
       battle.run().catch(err => { console.error(err); toast("战场出了差池：" + err.message); });
@@ -105,10 +163,12 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- HUD ---------------- */
+  // 战斗日志：引擎每 pushLog 一句就调这里——追加一行到日志框并自动滚到底。
   function onLog(s) {
     const el = $("#battle-log");
     if (!el) return;
     const div = document.createElement("div");
+      // 按内容分级样式：「——」开头的是系统消息，含「倒下/血祭」的是强调消息（CSS 上变色）。
     if (s.indexOf("——") === 0) div.className = "sys";
     else if (s.indexOf("倒下") >= 0 || s.indexOf("血祭") >= 0) div.className = "em";
     div.textContent = s;
@@ -116,6 +176,8 @@ window.SJI_UI = (function () {
     el.scrollTop = el.scrollHeight;
   }
 
+  /* ---------- HUD 全量刷新：把引擎里 battle 的最新数值抄写到各个 DOM 元素 ----------
+   * 本文件更新界面用「每次重建 innerHTML」的土办法，直白但够用，新手最容易看懂。 */
   function updateAll() {
     if (!battle) return;
     const p = battle.player;
@@ -123,6 +185,7 @@ window.SJI_UI = (function () {
     pc.style.background = p.ch.color;
     pc.textContent = p.ch.glyph;
     $("#pc-name").innerHTML = "<b>" + p.ch.name + "</b>（" + p.ch.hao + "）";
+    // 血条：内层 div 宽度=血量百分比；血量不足三成时加 .low / .critical 类（告警交给 CSS）。
     const hpPct = Math.max(0, p.hp / p.maxhp * 100);
     const inner = $("#pc-hp-in");
     inner.style.width = hpPct + "%";
@@ -131,6 +194,7 @@ window.SJI_UI = (function () {
     $("#player-card").classList.toggle("critical", p.alive && p.hp <= p.maxhp * 0.3);
     $("#pc-hp-tx").textContent = "血 " + Math.max(0, p.hp) + " / " + p.maxhp;
     const pips = $("#ap-pips");
+    // 行动点（AP）：有几动就摆几个小圆点。老套路：先清空容器再重摆。
     pips.innerHTML = "";
     for (let i = 0; i < Math.max(p.apNow, 0); i++) {
       const d = document.createElement("div"); d.className = "ap-pip on"; pips.appendChild(d);
@@ -138,6 +202,7 @@ window.SJI_UI = (function () {
     const chips = $("#pc-st");
     chips.innerHTML = "";
     const addChip = (txt, color) => { const s = document.createElement("span"); s.className = "st-chip"; s.style.background = color; s.textContent = txt; chips.appendChild(s); };
+    // 状态角标：刀/马/毒/盾…有哪个摆哪个，一个彩色小标签。
     if (p.hasKnife) addChip("刀", "#7a5c30");
     if (p.hasHorse) addChip("马", "#5c3070");
     if (p.st.bloodlust > 0) addChip("血祭×" + p.st.bloodlust, "#a63a2b");
@@ -157,6 +222,8 @@ window.SJI_UI = (function () {
     skBtn.innerHTML = sk ? sk.name + (cd > 0 ? "（歇" + cd + "）" : (sk.ap ? "·" + sk.ap + "动" : "")) : "无技";
     skBtn.disabled = !sk || !skOk || phaseLocked();
     // 其它按钮
+    // 接下来一排 .disabled=... 是「按钮何时点不了」的规则汇总（要和引擎判定保持一致）：
+    // 没刀不能砍、没行动点不能动、没轮到玩家（phaseLocked）全锁、「锁门」特则禁马踢等。
     $("#b-knife").disabled = p.hasKnife || (!(!phaseLocked() && p.apNow > 0) && p.charId !== "lifan");
     $("#b-knife").textContent = p.hasKnife ? "已持刀" : "购刀" + (p.charId === "lifan" ? "·免动" : "·1动");
     $("#b-horse").disabled = p.hasHorse || phaseLocked() || p.apNow <= 0;
@@ -177,6 +244,7 @@ window.SJI_UI = (function () {
     // 敌人列表
     const elist = $("#enemy-list");
     elist.innerHTML = "";
+      // 每个敌人拼一行 HTML：头像、称号、行动点小点、血条；阵亡的加 .dead 类变灰。
     battle.units.filter(u => u.side === "enemy").forEach(u => {
       const row = document.createElement("div");
       row.className = "enemy-row" + (u.alive ? "" : " dead");
@@ -189,6 +257,7 @@ window.SJI_UI = (function () {
     $("#round-no").textContent = "第 " + battle.round + " 回合" + (battle.mode === "survival" ? " · 第" + battle.survivalWaveNo + "波" : "");
     renderRareChips();
     if ($("#ai-label")) {
+        // 顶部小字：难度与 AI 风格文案，按当前战局的 diff / aiAggr 查表拼出来。
       const nm = CFG.AI_LABEL || {};
       const dn = { easy: "简单", normal: "普通", hard: "困难", extreme: "极难", nightmare: "噩梦" };
       const diffTxt = dn[battle.diff] || "普通";
@@ -218,43 +287,54 @@ window.SJI_UI = (function () {
     });
   }
 
+  // 「现在能不能点按钮」：战斗没开始 / 已结束 / 还没轮到玩家，都算锁死。
   function phaseLocked() { return !battle || battle.over || battle._playerPhaseActive !== true; }
 
+  /* ---------- 玩家回合：引擎 await 本函数，直到玩家收手才放行 ----------
+   * 奥妙在 _phaseResolve：把 Promise 的 resolve 暂存到战局对象上，endPlayerPhase()
+   * 再调用它——「把放行开关交给别人保管」是异步代码的常见手法。 */
   async function playerPhase(b) {
     battle = b;
     b._playerPhaseActive = true;
     await showBanner("汝之回合", 700);
     if (checkAutoEnd()) { b._playerPhaseActive = false; return; }
     updateAll();
+    // 卡在这一行等玩家：resolve 被存进 _phaseResolve，endPlayerPhase() 调用它才继续往下走。
     await new Promise(resolve => { b._phaseResolve = resolve; });
     b._playerPhaseActive = false;
     mode = null;
     updateAll();
   }
 
+  // 行动点耗尽 / 倒下 / 被遣返 / 战斗已分胜负：这些情况回合自动收，不用玩家点按钮。
   function checkAutoEnd() {
     if (!battle) return true;
     const p = battle.player;
     return battle.over || p.apNow <= 0 || !p.alive || p.offField > 0;
   }
 
+  // 玩家每次操作（移动/攻击/买刀…）完成后都走这里：刷新界面 + 检查要不要自动收回合。
   function afterPlayerAction() {
     updateAll();
     if (checkAutoEnd()) endPlayerPhase();
   }
+  // 收回合：调用先前暂存的 resolve，把 playerPhase 里的 await 放行。
   function endPlayerPhase() {
     mode = null;
     if (battle && battle._phaseResolve) { const r = battle._phaseResolve; battle._phaseResolve = null; r(); }
   }
 
   /* ---------------- 行动按钮 ---------------- */
+  // arm=进入「选目标」模式（再点一次同按钮可取消）；真正出手发生在画布的点击逻辑里。
   function arm(m) { mode = (mode === m) ? null : m; updateAll(); }
+  // 把 HUD 各按钮的 onclick 绑好。只在 boot 时绑一次，之后按钮不换、只换数据。
   function bindActions() {
     $("#b-knife").onclick = async () => { AU.click(); await battle.doBuyKnife(battle.player); afterPlayerAction(); };
     $("#b-horse").onclick = async () => { AU.click(); await battle.doBuyHorse(battle.player); afterPlayerAction(); };
     $("#b-attack").onclick = () => { AU.click(); arm("knife"); };
     $("#b-horseatk").onclick = () => { AU.click(); arm("horse"); };
     $("#b-drive").onclick = () => { AU.click(); arm("drive"); };
+      // 技能按钮：需要选目标的技能进入 mode='skill'（再点敌人），无需目标的直接放。
     $("#b-skill").onclick = () => {
       AU.click();
       const p = battle.player, sk = battle.skillOf(p, 0);
@@ -267,6 +347,7 @@ window.SJI_UI = (function () {
       if (battle.undoMove()) { mode = null; updateAll(); }
     };
     $("#b-wait").onclick = () => { AU.click(); endPlayerPhase(); };
+      // 认输/离场都先弹确认框，确认了才调引擎 finish("lose") 结算败北。
     $("#b-surrender").onclick = () => {
       modal('<h3>认输？</h3><p>胜负乃兵家常事，重开重开。</p><div class="btnrow"><button class="btn" id="m-no">再战</button><button class="btn primary" id="m-yes">认输</button></div>');
       $("#m-no").onclick = closeModal;
@@ -291,6 +372,7 @@ window.SJI_UI = (function () {
       $("#b-mute").textContent = v ? "音" : "默";
       AU.click();
     };
+    // 战场快捷键：Esc 取消选目标，空格=结束回合。只在 BATTLE_ACTIVE 时响应。
     document.addEventListener("keydown", ev => {
       if (!window.BATTLE_ACTIVE) return;
       if (ev.key === "Escape" && mode) { mode = null; updateAll(); }
@@ -299,7 +381,10 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 猜拳 ---------------- */
+  // 猜拳三选项：k=内部键名，g=手势 emoji，n=中文名。
   const RPS = [{ k: "rock", g: "✊", n: "石头" }, { k: "scissors", g: "✌", n: "剪刀" }, { k: "paper", g: "✋", n: "布" }];
+  /* ---------- 猜拳：引擎开局 await ui.rpsRound(this) 领行动点 ----------
+   * 返回 {res:"胜/和/负", ap:2~4}。设置选「自动」就按概率直接随机，否则弹窗让玩家出拳。 */
   async function rpsRound(b) {
     battle = b;
     if (SAVE.settings.rpsMode === "auto") {
@@ -313,6 +398,7 @@ window.SJI_UI = (function () {
     }
     await showBanner("猜拳定行动", 650);
     if (b.over) return { res: "和", ap: 2 };
+    // 排队开弹窗；返回的 Promise 要等玩家出拳、结果展示完才 resolve（引擎正 await 它）。
     return queueModal(() => new Promise(resolve => {
       modal(
         '<div class="rps-title">猜 拳</div>' +
@@ -322,6 +408,7 @@ window.SJI_UI = (function () {
         '<div class="rps-result" id="rps-res">　</div>'
       );
       const vs = $("#rps-vs"), res = $("#rps-res");
+      // 给三个手势按钮绑点击：点一下走完「对手手势滚动→判定→展示结果」的小演出。
       $$("#modal-box .rps-btn").forEach(btn => {
         btn.onclick = async () => {
           const mine = RPS[+btn.dataset.i];
@@ -342,6 +429,7 @@ window.SJI_UI = (function () {
           setTimeout(() => { closeModal(); resolve({ res: resK, ap }); }, window.SJI_DEBUG && window.SJI_DEBUG.fast ? 30 : 850);
         };
       });
+      // 调试开关 autoRps：30 毫秒后替玩家随机点一个，用来自动演算。
       if (window.SJI_DEBUG && window.SJI_DEBUG.autoRps) {
         setTimeout(() => { const b2 = $$("#modal-box .rps-btn")[Math.floor(Math.random() * 3)]; if (b2 && !b2.disabled) b2.click(); }, 30);
       }
@@ -353,6 +441,8 @@ window.SJI_UI = (function () {
     battle = b;
     if (b.over) return null;
     const taken = b.boonsTaken || [];
+      // 候选池：两个普通增益 + 一个稀有增益，各自洗牌取头部，已拿过的不再出现。
+      // sort(() => Math.random() - 0.5) 是「胡乱洗牌」的民间偏方；不够三个拿普通凑。
     const commons = D.BOONS.filter(x => !x.rare && !taken.includes(x.id)).sort(() => Math.random() - 0.5);
     const rares = D.BOONS.filter(x => x.rare && !taken.includes(x.id)).sort(() => Math.random() - 0.5);
     const pool = commons.slice(0, 2).concat(rares.slice(0, 1)).sort(() => Math.random() - 0.5);
@@ -371,11 +461,15 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 剧情对话（战斗内弹层） ---------------- */
+  /* ---------- 剧情对话：逐字打字机效果的弹层，lines=[[说话人, 台词], ...] ----------
+   * 返回 Promise：读完最后一行/点跳过/按 Esc 才 resolve，方便外层 await 串场。 */
   function showDialogue(lines) {
     if (window.SJI_DEBUG && window.SJI_DEBUG.skipScenes) return Promise.resolve();
     const runScene = () => new Promise(resolve => {
       const mask = $("#modal-mask"), box = $("#modal-box");
       let idx = 0, typing = null, done = false;
+      // finish=收尾：清打字机定时器、摘键盘监听、关弹层，然后 resolve 放行。
+      // done 标志保证只收一次：连点、连按导致的重复触发会被直接忽略。
       function finish() {
         if (done) return;
         done = true;
@@ -387,6 +481,7 @@ window.SJI_UI = (function () {
         box.innerHTML = "";
         resolve();
       }
+      // 渲染一行对话：拼 HTML、点亮遮罩，再开 setInterval 每 22 毫秒多露一个字。
       function showLine() {
         const pair = lines[idx];
         const sp = speakerOf(pair[0]);
@@ -408,12 +503,14 @@ window.SJI_UI = (function () {
           if (i >= pair[1].length) { clearInterval(typing); typing = null; }
         }, 22);
         $("#dlg-skip").onclick = (e) => { e.stopPropagation(); finish(); };
+        // 点击弹层：字没打完→立即显示整句；打完了→翻下一行（或结束）。
         box.onclick = () => {
           if (typing) { clearInterval(typing); typing = null; tx.textContent = pair[1]; return; }
           idx++;
           if (idx >= lines.length) finish(); else showLine();
         };
       }
+      // 键盘也想当鼠标用：空格/回车等效点击弹层，Esc 直接跳过整段。
       function onKey(e) {
         if (e.key === " " || e.key === "Enter") { e.preventDefault(); if (box.onclick) box.onclick(); }
         if (e.key === "Escape") finish();
@@ -425,6 +522,7 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 横幅/特效 ---------------- */
+  // 顶部大横幅（「汝之回合」这类）：亮 ms 毫秒自动熄灭；返回 Promise 供 await 等它熄完。
   function showBanner(text, ms) {
     const el = $("#phase-banner");
     el.textContent = text;
@@ -432,9 +530,11 @@ window.SJI_UI = (function () {
     return new Promise(r => setTimeout(() => { el.classList.remove("on"); r(); }, (window.SJI_DEBUG && window.SJI_DEBUG.fast ? 60 : ms)));
   }
 
+  // 格子逻辑坐标(r,c) → 画布像素坐标：取该格中心。u.rx/ry 是「显示用坐标」（见 draw 的插值）。
   function uPos(u) {
     return { x: PAD + u.rx * TILE + TILE / 2, y: PAD + u.ry * TILE + TILE / 2 };
   }
+  // 往单位头顶塞一条飘字；文本以 + 开头的还顺手撒一把绿色小粒子（回复的仪式感）。
   function fxFloat(u, text, color) {
     floaters.push({ u, text, color, t: 1, dy: 0 });
     if (text && text[0] === "+") {
@@ -442,6 +542,7 @@ window.SJI_UI = (function () {
       spawnParticles(P.x, P.y, { n: 8, colors: ["#7fe08a", "#ffd98a"], speed: 55, life: 0.7, grav: -70, size: 2.5 });
     }
   }
+  // 受击三件套：白闪 + 伤害飘字 + 撞粒子；毒伤紫色、马踢尘土色，伤害≥3 再加屏震。
   function fxHit(u, dmg, opts) {
     u.flash = 1;
     fxFloat(u, "-" + dmg, opts && opts.poison ? "#b06ad0" : "#d63a2a");
@@ -452,11 +553,15 @@ window.SJI_UI = (function () {
     if (dmg >= 3) addShake(6);
   }
   function fxStatus(u, text) { banner = { text, t: 1.4 }; }
+  // 瞬移对齐：把显示坐标直接拽到逻辑坐标——引擎改了 r/c 后调它，免得棋子慢慢滑过去。
   function snap(u) { u.rx = u.c; u.ry = u.r; }
 
   /* ---------------- 打击特效系统 ---------------- */
+  // 各类特效的「弹夹」（数组）：spawn 进来、draw 里每帧老化，寿命归零就移除。
+  // shakeT/shakeMag=屏震的剩余时间与强度。
   let particles = [], slashes = [], projectiles = [], rings = [], ghosts = [], vignettes = [];
   let shakeT = 0, shakeMag = 0;
+  // 每个角色远程弹道画风：[样式, 颜色]——箭矢/光束/纸符/波纹…按 charId 查表。
   const PROJ_STYLE = {
     wenbin: ["arrow", "#3a2a1a"], wonder: ["beam", "#d8a11f"], shaoming: ["paper", "#f5efe0"],
     xinhui: ["wave", "#c04a6a"], shibo: ["beam", "#4f6d8c"], weirong: ["beam", "#6b4f8c"],
@@ -467,6 +572,8 @@ window.SJI_UI = (function () {
     yinkesi: ["paper", "#a63a2b"]
   };
 
+  // 撒 n 颗粒子：角度速度随机、寿命随机；grav 正=下坠、负=上升（回血粒子往上飘）。
+  // 粒子超 320 颗就丢最老的，防止大混战时无限堆积拖垮帧率。
   function spawnParticles(x, y, o) {
     const n = o.n || 10;
     for (let i = 0; i < n; i++) {
@@ -482,9 +589,12 @@ window.SJI_UI = (function () {
   }
   function addShake(mag) { shakeMag = Math.max(shakeMag, mag); shakeT = Math.max(shakeT, 1); }
 
+  /* 攻击演出调度：贴脸（切比雪夫距离≤1）→扑身+刀光；马踢→冲击环+扬尘；
+   * 远距离→按 PROJ_STYLE 发一枚飞行道具。引擎只报「谁打谁」，画面这里自己挑。 */
   function fxAttack(att, def, opts) {
     if (!att || !def) return;
     const A = uPos(att), B = uPos(def);
+    // 切比雪夫距离：棋盘上横竖斜都算一步的距离，本作「相邻」判定全靠它。
     const cheb = Math.max(Math.abs(att.r - def.r), Math.abs(att.c - def.c));
     const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1;
     if (opts.type === "horse") {
@@ -504,24 +614,31 @@ window.SJI_UI = (function () {
     projectiles.push({ x: A.x, y: A.y, tx: B.x, ty: B.y, t: 0, style: st[0], color: st[1] });
   }
 
+  // 阵亡演出：留一具上浮渐隐的「遗影」，再撒一把该角色颜色的碎屑。
   function fxDeath(u) {
     const P = uPos(u);
     ghosts.push({ x: P.x, y: P.y, glyph: u.ch.glyph, color: u.ch.color, t: 1.3 });
     spawnParticles(P.x, P.y, { n: 22, colors: [u.ch.color, "#6a615a", "#2b2622"], speed: 150, life: 0.7, size: 3.5 });
   }
 
+  // 全屏边缘晕影（血祭时红色渐染），rgb 形如 "166,58,43"。
   function fxVignette(rgb) { vignettes.push({ rgb, t: 1 }); }
 
   /* ---------------- 画布 ---------------- */
+  /* ---------- 背景预绘制：静态战场画进一张离屏 canvas，之后每帧只贴图 ----------
+   * Canvas 游戏经典提速手法：砖墙/草叶/障碍/角楼/旗帜画一次就够，不必每帧重画。
+   * 障碍物画法由 cfg.stage.terrain 决定（terrain 只管长相，能不能走由引擎说了算）。 */
   function buildBG() {
     bgCanvas = document.createElement("canvas");
     bgCanvas.width = CS; bgCanvas.height = CS;
     const g = bgCanvas.getContext("2d");
     g.fillStyle = "#efe4c8"; g.fillRect(0, 0, CS, CS);
+    // 先铺 900 条极淡的半透明小短条，做出旧纸/羊皮底的质感。
     for (let i = 0; i < 900; i++) {
       g.fillStyle = "rgba(" + (120 + Math.random() * 60 | 0) + "," + (100 + Math.random() * 50 | 0) + "," + (60 + Math.random() * 40 | 0) + "," + (Math.random() * 0.05) + ")";
       g.fillRect(Math.random() * CS, Math.random() * CS, Math.random() * 26 + 4, Math.random() * 3 + 1);
     }
+    // 逐格画棋盘：城墙格画砖缝、空地画草叶（最外圈即城墙，规则见引擎 isWall）。
     for (let r = 0; r < E.SIZE; r++) for (let c = 0; c < E.SIZE; c++) {
       const x = PAD + c * TILE, y = PAD + r * TILE;
       if (E.isWall(r, c)) {
@@ -541,6 +658,7 @@ window.SJI_UI = (function () {
         }
       } else {
         g.fillStyle = "#eee2c2"; g.fillRect(x, y, TILE, TILE);
+        // 用格子坐标凑个伪随机 seed：每格草叶位置固定，重绘也不乱跳。
         const seed = (r * 7 + c * 13) % 5;
         g.strokeStyle = "rgba(120,130,70,.28)"; g.lineWidth = 1.2;
         for (let i = 0; i < 3; i++) {
@@ -553,6 +671,7 @@ window.SJI_UI = (function () {
       g.strokeRect(x + .5, y + .5, TILE - 1, TILE - 1);
     }
     // 障碍格：按关卡地形类型绘制
+    // 战场参数从战局配置取：blocked=障碍格列表，terrain=障碍物画成什么物件。
     const stage = (battle && battle.cfg && battle.cfg.stage) || null;
     const blocked = (stage && stage.blocked) || [];
     const ttype = (stage && stage.terrain) || "desk";
@@ -594,6 +713,7 @@ window.SJI_UI = (function () {
         g.fillStyle = "#a63a2b";
         g.fillRect(x + TILE / 2 - 10, y + 20, 20, 6);
       } else {
+        // 默认画法：课桌+凳+书+墨水瓶（terrain 缺省或 desk 都走这支）。
         const bw = TILE - 22, bh = TILE - 30;
         g.fillStyle = "#8a6a45";
         g.fillRect(x + 11, y + 12, bw, bh);
@@ -641,6 +761,7 @@ window.SJI_UI = (function () {
     }
     g.strokeStyle = "#8a7a58"; g.lineWidth = 3;
     g.strokeRect(PAD - 1.5, PAD - 1.5, E.SIZE * TILE + 3, E.SIZE * TILE + 3);
+    // 最后盖个 10% 透明度的「馬刀」大字水印；save/restore 把透明度改动限制在这一小段内。
     g.save();
     g.globalAlpha = 0.1;
     g.font = "bold 120px KaiTi, STKaiti, serif";
@@ -649,8 +770,12 @@ window.SJI_UI = (function () {
     g.restore();
   }
 
+  // 画质档位：full 全特效 / lite 减粒子 / off 关特效，读存档里的设置。
   function fxLevel() { return SAVE.settings.fx || "full"; }
 
+  /* ---------- 动画主循环：requestAnimationFrame 反复调 draw ----------
+   * dt=距上一帧的秒数（封顶 0.05，防止标签页切走再回来时棋子瞬移）。
+   * 所有动画量都按 dt 老化：帧率高慢都不影响速度观感。 */
   function startRaf() {
     if (rafOn) return;
     rafOn = true;
@@ -668,20 +793,25 @@ window.SJI_UI = (function () {
   }
   function stopRaf() { rafOn = false; }
 
+  /* ---------- 每帧绘制：背景→可走点→目标高亮→单位→特效→飘字→晕影 ----------
+   * 顺序即图层：后画的盖在先画的上面。 */
   function draw(ctx, dt) {
     if (!bgCanvas) return;
     ctx.clearRect(0, 0, CS, CS);
     ctx.drawImage(bgCanvas, 0, 0);
     if (!battle) return;
     ctx.save();
+    // 屏幕震动：随机平移画布原点，幅度随 shakeT 衰减（外层有 save/restore 保护现场）。
     if (shakeT > 0 && fxLevel() !== "off") {
       shakeT -= dt * 2.4;
       const m = shakeMag * Math.max(0, shakeT);
       ctx.translate((Math.random() - .5) * m, (Math.random() - .5) * m);
     }
+    // 播放速度倍率（速×1/2/3 档）：数值越小，后面插值追得越快，动作显得越快。
     const speedK = [1, 0.6, 0.3][SAVE.settings.speed - 1] || 1;
 
     const p = battle.player;
+    // 轮到玩家且没在选目标时：把移动可达的格子点上绿点（可达集合由引擎 _reachable 算好）。
     if (battle._playerPhaseActive && p.alive && p.offField <= 0 && mode === null && !checkAutoEnd()) {
       const reach = battle._reachable(p, battle.moveRange(p));
       ctx.fillStyle = "rgba(80,140,70,.30)";
@@ -691,6 +821,7 @@ window.SJI_UI = (function () {
         dot(ctx, PAD + c * TILE + TILE / 2, PAD + r * TILE + TILE / 2, 10);
       }
     }
+    // 选目标模式：给所有合法目标描红框，透明度随 sin 波动产生闪烁感。
     if (mode === "knife" || mode === "horse" || mode === "skill" || mode === "drive") {
       const t = performance.now() / 300;
       const targets = battle.opponentsOf(p).filter(f =>
@@ -706,16 +837,20 @@ window.SJI_UI = (function () {
       }
     }
 
+    // 画单位。先排序：敌方在前玩家在后，保证玩家棋子总盖在敌人上面。
     const order = [...battle.units].sort((a, b) => (a.side === "player" ? 1 : 0) - (b.side === "player" ? 1 : 0));
     for (const u of order) {
       if (!u.alive || u.offField > 0) continue;
+      // 平滑移动：显示坐标 rx/ry 每帧向逻辑坐标 r/c 靠近一部分（比例插值），看着像滑动。
       u.rx += (u.c - u.rx) * Math.min(1, dt * 8 / speedK);
       u.ry += (u.r - u.ry) * Math.min(1, dt * 8 / speedK);
       if (u.flash > 0) u.flash -= dt * 3;
       let px = PAD + u.rx * TILE + TILE / 2, py = PAD + u.ry * TILE + TILE / 2;
+      // 受击白闪：flash 从 1 衰减到 0，期间高频左右抖动、底色瞬间变白。
       if (u.flash > 0) {
         px += Math.sin(u.flash * 40) * 5 * u.flash;
       }
+      // 扑击位移：朝目标方向冲出去再收回（sin 曲线先冲后退），让近战有「撞上去」的手感。
       if (u._lunge) {
         u._lunge.t -= dt * 5;
         if (u._lunge.t <= 0) delete u._lunge;
@@ -723,6 +858,7 @@ window.SJI_UI = (function () {
       }
       ctx.fillStyle = "rgba(60,40,20,.18)";
       ctx.beginPath(); ctx.ellipse(px, py + 26, 26, 8, 0, 0, 7); ctx.fill();
+      // arc 的结束角写 7（大于 2π≈6.28）是本文件惯例：多画一点保证闭合成整圆。
       ctx.beginPath(); ctx.arc(px, py, 29, 0, 7);
       ctx.fillStyle = u.flash > 0 && Math.sin(u.flash * 50) > 0 ? "#ffffff" : u.ch.color;
       ctx.fill();
@@ -745,6 +881,8 @@ window.SJI_UI = (function () {
       ctx.strokeStyle = "rgba(0,0,0,.4)"; ctx.lineWidth = 3;
       ctx.strokeText(u.ch.glyph, px, py + 1);
       ctx.fillText(u.ch.glyph, px, py + 1);
+      // 头顶血条：深色底 + 白色「残影」层 + 实际血量层（绿/红）。
+      // hpGhost 是「追血」显示：掉血后白条花几帧慢慢追上红条，反馈更有余韵。
       const hw = 56, hpc = Math.max(0, u.hp / u.maxhp);
       if (u.hpGhost === undefined) u.hpGhost = u.hp;
       if (u.hp < u.hpGhost) u.hpGhost = Math.max(u.hp, u.hpGhost - dt * 7);
@@ -757,9 +895,11 @@ window.SJI_UI = (function () {
       ctx.fillStyle = hpc > 0.3 ? "#6aa84f" : "#cc4125";
       ctx.fillRect(px - hw / 2, py + 35, hw * hpc, 6);
       ctx.font = "13px serif";
+      // 右上角小角标：有刀写「刀」、有马写「马」（bx 左移防重叠）。
       let bx = px + 20;
       if (u.hasKnife) { ctx.fillStyle = "#ffd98a"; ctx.fillText("刀", bx, py - 26); bx -= 15; }
       if (u.hasHorse) { ctx.fillStyle = "#d8c8ff"; ctx.fillText("马", bx, py - 26); }
+      // 头顶状态小字：毒/祭/晕/封，逐个往上叠一行。
       let sy = py - 40;
       ctx.font = "12px serif";
       if (u.st.poison > 0) { ctx.fillStyle = "#b06ad0"; ctx.fillText("毒" + u.st.poison, px, sy); sy -= 13; }
@@ -768,6 +908,7 @@ window.SJI_UI = (function () {
       if (u.st.seal > 0) { ctx.fillStyle = "#666"; ctx.fillText("封", px, sy); sy -= 13; }
     }
 
+    // 被遣返回家的单位：在出生位画半透明虚线圈 + 「返家」二字。
     for (const u of battle.units) {
       if (!u.alive || u.offField <= 0) continue;
       const pos = uPos(u);
@@ -783,6 +924,7 @@ window.SJI_UI = (function () {
       ctx.globalAlpha = 1;
     }
 
+    // 鼠标悬停的单位描一圈深色外框（悬停格 hoverTile 在 mousemove 里更新）。
     const hu = hoverUnit();
     if (hu && hu.alive) {
       const pos = uPos(hu);
@@ -791,8 +933,10 @@ window.SJI_UI = (function () {
     }
 
     const FX = fxLevel();
+    // 画质开关落地：off 清空全部特效队列；lite 把粒子砍到 40 颗以内。
     if (FX === "off") { slashes.length = 0; projectiles.length = 0; rings.length = 0; ghosts.length = 0; particles.length = 0; }
     else if (FX === "lite" && particles.length > 40) particles.length = 40;
+    // 下面五个特效循环一个套路：倒序遍历（方便 splice 删除不乱序）→老化→到点移除→画。
     for (let i = slashes.length - 1; i >= 0; i--) {
       const sl = slashes[i];
       sl.t -= dt * 3.2;
@@ -814,6 +958,7 @@ window.SJI_UI = (function () {
         spawnParticles(pr.tx, pr.ty, { n: 9, colors: [pr.color, "#f2ead8"], speed: 100, life: 0.4 });
         projectiles.splice(i, 1); continue;
       }
+      // 弹道插值：从起点线性走向终点，再叠一个 sin 抬升，让弹道呈弧线。
       const x = pr.x + (pr.tx - pr.x) * pr.t, y = pr.y + (pr.ty - pr.y) * pr.t - Math.sin(pr.t * Math.PI) * 14;
       ctx.save();
       if (pr.style === "beam") {
@@ -909,6 +1054,7 @@ window.SJI_UI = (function () {
       if (fxLevel() === "off") { vignettes.length = 0; break; }
       v.t -= dt * 1.6;
       if (v.t <= 0) { vignettes.splice(i, 1); continue; }
+      // 径向渐变晕影：中心透明→边缘染色，每帧新建一次渐变对象（量小，可接受）。
       const g = ctx.createRadialGradient(CS / 2, CS / 2, CS * 0.28, CS / 2, CS / 2, CS * 0.72);
       g.addColorStop(0, "rgba(" + v.rgb + ",0)");
       g.addColorStop(1, "rgba(" + v.rgb + "," + (v.t * 0.4).toFixed(3) + ")");
@@ -917,6 +1063,7 @@ window.SJI_UI = (function () {
     }
   }
 
+  // 技能射程判定：切比雪夫距离 ≤ 技能 range（没写 range 默认贴脸 1 格）。
   function chebSkillRange(p, f) {
     const sk = battle.skillOf(p, 0);
     if (!sk) return false;
@@ -926,6 +1073,8 @@ window.SJI_UI = (function () {
 
   function dot(ctx, x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); }
 
+  /* 鼠标坐标 → 格子坐标：canvas 的 CSS 显示尺寸可能被拉伸，与内部分辨率不一致，
+   * 得先按 rect 的缩放比换算回画布坐标，再减 PAD、除 TILE、取整得到格点。 */
   function tileFromEvent(ev) {
     const cv = $("#battle-canvas");
     const rect = cv.getBoundingClientRect();
@@ -935,12 +1084,15 @@ window.SJI_UI = (function () {
     if (r < 0 || c < 0 || r >= E.SIZE || c >= E.SIZE) return null;
     return { r, c };
   }
+  // 当前悬停格上有没有单位（没有则 null）。
   function hoverUnit() {
     if (!hoverTile || !battle) return null;
     return battle.unitAt(hoverTile.r, hoverTile.c);
   }
 
+  // 是触屏设备吗？手机上没有 mousemove 悬停提示，点击判定得另走一套（见 bindCanvasTouch）。
   const IS_TOUCH = (typeof window !== "undefined") && ("ontouchstart" in window || navigator.maxTouchPoints > 0);
+  // 桌面端画布交互：悬停提示框、点击（移动/出手）、右键取消选目标。
   function bindCanvas() {
     const cv = $("#battle-canvas");
     if (cv) cv.style.touchAction = "manipulation";
@@ -960,6 +1112,8 @@ window.SJI_UI = (function () {
       } else tip.style.display = "none";
     });
     cv.addEventListener("mouseleave", () => { hoverTile = null; $("#tooltip").style.display = "none"; });
+    // 点击画布总入口：正选目标→试着对点中的对象出手（不合法就取消）；
+    // 没在选目标→试着走到点中的格子（必须在引擎算出的可达集合里）。
     cv.addEventListener("click", async ev => {
       if (!battle || battle.over || !battle._playerPhaseActive) return;
       const tile = tileFromEvent(ev);
@@ -1003,6 +1157,7 @@ window.SJI_UI = (function () {
         mode = null; updateAll(); return;
       }
       if (target) return;
+      // 走到这说明不是在选目标：点中的格子在可达集合（「r,c」键）里就执行移动。
       const reach = battle._reachable(p, battle.moveRange(p));
       const key = tile.r + "," + tile.c;
       if (reach.keys.includes(key) && !battle.unitAt(tile.r, tile.c)) {
@@ -1010,9 +1165,11 @@ window.SJI_UI = (function () {
         afterPlayerAction();
       }
     });
+    // 右键=取消选目标；preventDefault 挡掉浏览器右键菜单。
     cv.addEventListener("contextmenu", ev => { ev.preventDefault(); mode = null; updateAll(); });
   }
 
+  // 触屏版：没有悬停，只有 pointerup「点哪算哪」，判定与桌面 click 相同的浓缩版。
   function bindCanvasTouch(cv) {
     cv.addEventListener("pointerup", async ev => {
       if (!battle || battle.over || !battle._playerPhaseActive) return;
@@ -1044,6 +1201,9 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 结算：交给世界侧的钩子渲染，然后回校园 ---------------- */
+  /* ---------- 结算：引擎分出胜负后调这里，本模块负责收尾演出 ----------
+   * 流程：音效 → 停 1.3 秒 → 播胜利/败北对话（cfg 配的或场景表 SJI_SCENES 的）→
+   * 请世界侧钩子 onResult(b) 生成奖励文案 → 弹结算面板。 */
   function onBattleEnd(b) {
     battle = b;
     endPlayerPhase();
@@ -1065,6 +1225,7 @@ window.SJI_UI = (function () {
     }, window.SJI_DEBUG && window.SJI_DEBUG.fast ? 150 : 1300);
   }
 
+  // 拼结算面板 HTML：胜/败大印、战报、按钮；败了才给「重整旗鼓」。
   function showResult(b, extraHtml) {
     const win = b.result === "win";
     $("#result-body").innerHTML =
@@ -1078,10 +1239,12 @@ window.SJI_UI = (function () {
     const retryBtn = $("#r-retry");
     if (retryBtn) retryBtn.onclick = () => {
       AU.click();
+      // 重开一场：浅拷贝 cfg 并删掉开场对话，再打就不用重听对白了。
       const cfg = Object.assign({}, b.cfg);
       delete cfg.introScene;
       startBattle(cfg, onEndCb);
     };
+    // 回校园：先叫世界侧钩子 onDone(b)（发奖励/存档/切场景），再撤覆盖层。
     $("#r-menu").onclick = () => {
       AU.click();
       if (window.SJI_BATTLE_HOOKS && window.SJI_BATTLE_HOOKS.onDone) window.SJI_BATTLE_HOOKS.onDone(b);
@@ -1101,6 +1264,7 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 启动绑定 ---------------- */
+  // 启动绑定：页面 DOM 就绪后调一次——绑按钮、绑画布、把速度/音效按钮的文字归位。
   function boot() {
     bindActions();
     bindCanvas();
@@ -1109,6 +1273,9 @@ window.SJI_UI = (function () {
     AU.setSfx(SAVE.settings.sfx !== false);
   }
 
+  /* ---------- 对外接口：return 出去的对象就是 window.SJI_UI ----------
+   * 引擎与世界侧只通过这里列出的名字与本模块打交道。battle/active 是 getter，
+   * 外界只能读、不能直接改模块内部状态。 */
   return {
     boot, toast, startBattle, onLog, onState: updateAll,
     rpsRound, playerPhase, pickBoon, onBattleEnd,
@@ -1121,15 +1288,18 @@ window.SJI_UI = (function () {
 })();
 
 /* 全局命名空间（替代马刀 main.js）：设置与调试钩子 */
+// 全局命名空间：引擎 sleep() 按 SJI.settings.speed 定节奏；battle 槽开局时挂当前战局。
 window.SJI = {
   get settings() { return window.SJI_SAVE.settings; },
   battle: null
 };
+// DOM 树就绪再启动战斗层：绑事件的前提是按钮、画布这些元素已经存在。
 document.addEventListener("DOMContentLoaded", () => {
   try { window.SJI_UI.boot(); } catch (e) { console.error("战斗层启动失败:", e); }
 });
 // 首次交互解锁战斗音效（浏览器手势策略）
 document.addEventListener("pointerdown", () => { window.SJI_AUDIO.unlock(); }, { once: true });
+// 控制台调试工具：F12 里敲 SJI_DEBUG.killEnemies() 等可直接干预战局，方便测试。
 window.SJI_DEBUG = {
   fast: false,
   skipScenes: false,

@@ -1,8 +1,28 @@
 /* ============================================================
  * 实验史记 · 马刀风云 —— 界面与渲染
  * ============================================================ */
+/* ============================================================
+ * 【新手导读 · 先读我】这个文件不是生效代码！
+ *
+ * 【身份警告】index.html 并不加载本文件。如果你是搜「战斗界面」一路找到这里、
+ *   想改游戏里的战斗表现，请去改 js/battle-ui.js——改本文件对游戏毫无影响。
+ *
+ * 【它与 js/battle-ui.js 的关系】本文件是原版《马刀风云》单文件游戏的战斗界面，
+ *   自带主菜单、选人、图鉴、结算一整套页面；后来把它解耦改造成盖在世界探索
+ *   之上的战斗覆盖层，就是正式生效的 js/battle-ui.js（同样提供 window.SJI_UI）。
+ *   两个文件不会同时加载，谁被 index.html 引入谁生效——目前只有 battle-ui.js。
+ *   仓库保留本文件仅作历史参考与对照，想看这套界面的来龙去脉可两相对照着读。
+ *
+ * 【大区块地图】按出现顺序：屏幕管理(toast/弹窗/弹层队列) → 花瓣装饰 → 主菜单
+ *   → 选人(点将) → 乱斗组局 → 图鉴/成就/设置 → 战斗(HUD 刷新/玩家阶段/行动
+ *   按钮) → 猜拳 → 增益三选一 → 剧情对话 → 横幅与受击特效 → 打击特效系统
+ *   (粒子/刀光/弹道) → 画布(背景预绘/每帧渲染/鼠标触屏输入) → 结算 → 设置应用
+ *   → 启动 boot。
+ * 【注释口径】本文件只加区块级导读注释；逐行详解请看由它演变出的 js/battle-ui.js。
+ * ============================================================ */
 window.SJI_UI = (function () {
   "use strict";
+  // 把常用全局命名空间抓成本地短名：D=剧本数据、E=战斗引擎、SAVE=存档、AU=战斗音效（由前序 <script> 先行加载）。
   const D = window.SJI_DATA, E = window.SJI_ENGINE, SAVE = window.SJI_SAVE, AU = window.SJI_AUDIO;
   const CFG = window.SJI_CONFIG, GRID = CFG.GRID;
   const TILE = GRID.TILE, PAD = GRID.PAD, CS = GRID.CS;
@@ -20,6 +40,9 @@ window.SJI_UI = (function () {
   const $$ = s => [...document.querySelectorAll(s)];
 
   /* ---------------- 屏幕管理 ---------------- */
+  /* 换页与通用弹窗：showScreen 靠给 .screen 元素增删 .on 类来切换整页；
+     toast 是底部轻提示；modal 复用同一个 #modal-box，queueModal 再把
+     猜拳/增益/对话等弹窗排成队列，防止后弹的覆盖先弹的。 */
   function showScreen(id) {
     $$(".screen").forEach(s => s.classList.remove("on"));
     const el = $("#screen-" + id);
@@ -59,6 +82,7 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 花瓣 ---------------- */
+  /* 标题页/结算页的飘落花瓣装饰，纯视觉，无游戏逻辑。 */
   function spawnPetals(container, n, colors) {
     if (!container) return;
     container.innerHTML = "";
@@ -76,6 +100,8 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 主菜单 ---------------- */
+  /* 原版单文件游戏自带完整主菜单（继续上局/二周目/剧情/乱斗/生存/图鉴/成就/设置）。
+     生效版 battle-ui.js 已把这套菜单整体拆给世界探索侧，本文件原样保留备查。 */
   function initTitle() {
     $("#best-line").textContent = (SAVE.data.bestSurvival > 0 ? "破败城墙最远：第" + SAVE.data.bestSurvival + "波 · " : "") + "史册已成" + SAVE.clearedCount() + "/" + D.STAGES.length + "卷";
     const snap = SAVE.loadBattle();
@@ -169,6 +195,7 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 选人 ---------------- */
+  /* 点将页：选 1 名角色 + 选难度，点「出征」后把选项拼装成配置对象交给 startBattle。 */
   function openCharSelect(type, stage) {
     currentCtx = { type, stage };
     const grid = $("#charselect-grid");
@@ -217,6 +244,7 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 乱斗 ---------------- */
+  /* 自由乱斗组局页：自选 1 名角色，再从全角色池（含 BOSS）挑至多 3 名敌人开打。 */
   function renderFree() {
     const pgrid = $("#free-pgrid"), egrid = $("#free-egrid");
     pgrid.innerHTML = ""; egrid.innerHTML = "";
@@ -271,6 +299,7 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 图鉴/成就/设置 ---------------- */
+  /* 三个展示页的渲染：往各自的列表容器里拼卡片，纯读取数据，无战斗逻辑。 */
   function renderCodex() {
     const grid = $("#codex-grid");
     grid.innerHTML = "";
@@ -330,6 +359,8 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 战斗 ---------------- */
+  /* 战斗主线：startBattle 新建引擎的 E.Battle 实例、备好画布与 HUD 后开跑；
+     onLog 把引擎推来的战报逐条写进侧栏。HUD 具体刷新见下方 updateAll。 */
   function startBattle(cfg) {
     mode = null; floaters = []; banner = null;
     battle = new E.Battle(cfg);
@@ -358,6 +389,8 @@ window.SJI_UI = (function () {
   }
 
   /* HUD 刷新 */
+  /* updateAll 是整个战场的 HUD 总刷新：玩家卡/行动点/状态章/各按钮可用性/
+     敌人列表/回合数，每次行动后都要重跑一遍；按钮禁用条件直接写在赋值表达式里。 */
   function updateAll() {
     if (!battle) return;
     const p = battle.player;
@@ -439,6 +472,8 @@ window.SJI_UI = (function () {
   function phaseLocked() { return !battle || battle.over || battle._playerPhaseActive !== true; }
 
   /* 玩家阶段（引擎调用） */
+  /* 引擎 await playerPhase(b) 把操作权交给玩家：弹出「汝之回合」横幅后挂起在
+     Promise 上，直到玩家点「结束回合」或行动点耗尽才放行，引擎接着跑敌方回合。 */
   async function playerPhase(b) {
     battle = b;
     b._playerPhaseActive = true;
@@ -467,6 +502,8 @@ window.SJI_UI = (function () {
   }
 
   /* 行动按钮 */
+  /* 绑定战斗侧按钮组：arm(m) 切换「瞄准态」（出刀/骑冲/放技能），目标判定在画布
+     点击里完成；另有认输、离场、变速、静音按钮与 Esc/空格 快捷键。 */
   function arm(m) { mode = (mode === m) ? null : m; updateAll(); }
   function bindActions() {
     $("#b-knife").onclick = async () => { AU.click(); await battle.doBuyKnife(battle.player); afterPlayerAction(); };
@@ -515,6 +552,8 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 猜拳 ---------------- */
+  /* 猜拳定行动点：胜得 4 动、和得 3 动、负得 2 动，引擎每回合开头 await 此弹窗；
+     设置里可切成「自动猜拳」，按概率直接出结果不再弹窗。 */
   const RPS = [{ k: "rock", g: "✊", n: "石头" }, { k: "scissors", g: "✌", n: "剪刀" }, { k: "paper", g: "✋", n: "布" }];
   async function rpsRound(b) {
     battle = b;
@@ -566,6 +605,7 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 增益三选一 ---------------- */
+  /* 生存模式的「拾策」：从普通增益抽 2 个 + 稀有抽 1 个，三选一；本局拿过的不再出现。 */
   async function pickBoon(b) {
     battle = b;
     if (b.over) return null;
@@ -588,6 +628,8 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 剧情对话 ---------------- */
+  /* 打字机式对话弹窗：台词逐字显示，点击/空格推进、Esc 跳过；剧情关卡的开场、
+     胜利、失败对话由剧本表 SJI_SCENES 提供，经此函数演出。 */
   function showDialogue(lines) {
     if (window.SJI_DEBUG && window.SJI_DEBUG.skipScenes) return Promise.resolve();
     const runScene = () => new Promise(resolve => {
@@ -643,6 +685,9 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 横幅/特效 ---------------- */
+  /* 表现层钩子（由引擎调用）：showBanner 弹「汝之回合」这类大字横幅；fxFloat 在
+     单位头顶飘伤害/治疗数字；fxHit 做受击白闪+粒子；fxAttack 按近战/骑冲/远程
+     分派不同表现。引擎只管算数，画画全靠这一组。 */
   function showBanner(text, ms) {
     const el = $("#phase-banner");
     el.textContent = text;
@@ -673,6 +718,8 @@ window.SJI_UI = (function () {
   function snap(u) { u.rx = u.c; u.ry = u.r; }
 
   /* ---------------- 打击特效系统 ---------------- */
+  /* 特效对象池：粒子/刀光/弹道/扩散环/阵亡残影/暗角各自成数组，随帧老化后剔除；
+     PROJ_STYLE 给每个角色配了专属的远程弹道样式与颜色。 */
   let particles = [], slashes = [], projectiles = [], rings = [], ghosts = [], vignettes = [];
   let shakeT = 0, shakeMag = 0;
   const PROJ_STYLE = {
@@ -730,6 +777,8 @@ window.SJI_UI = (function () {
   function fxVignette(rgb) { vignettes.push({ rgb, t: 1 }); }
 
   /* ---------------- 画布 ---------------- */
+  /* 画布分两层：buildBG 只在开局跑一次，把宣纸底、砖墙、障碍物（按关卡 terrain
+     画成课桌/讲台/石柱/球台/柜子）、角楼与旗帜预绘进离屏 canvas；此后每帧直接贴图。 */
   function ttype2color(a, b) { return Math.random() < 0.5 ? a : b; }
 
   function buildBG() {
@@ -884,6 +933,8 @@ window.SJI_UI = (function () {
 
   function fxLevel() { return SAVE.settings.fx || "full"; }
 
+  /* startRaf/stopRaf 开关 requestAnimationFrame 渲染循环；draw 每帧重画：
+     移动范围高亮、瞄准描边、单位与血条（带缓动位移）、各特效层、飘字与技能横幅。 */
   function startRaf() {
     if (rafOn) return;
     rafOn = true;
@@ -1185,6 +1236,8 @@ window.SJI_UI = (function () {
     return battle.unitAt(hoverTile.r, hoverTile.c);
   }
 
+  /* 画布输入：鼠标端悬停弹单位信息、点击按当前瞄准态结算（移动/出刀/骑冲/放技能/
+     看图鉴）；触屏端没有悬停，用点按一步完成同样的判定（见 bindCanvasTouch）。 */
   const IS_TOUCH = (typeof window !== "undefined") && ("ontouchstart" in window || navigator.maxTouchPoints > 0);
   function bindCanvas() {
     const cv = $("#battle-canvas");
@@ -1285,6 +1338,9 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 结算 ---------------- */
+  /* onBattleEnd 由引擎在分出胜负时调用：放胜/败音、播完结尾对话后进结算页；
+     showResult 渲染结算面板，并集中处理通关标记、成就解锁、角色解锁、
+     生存纪录与「下一卷」按钮。 */
   function onBattleEnd(b) {
     battle = b;
     endPlayerPhase();
@@ -1410,6 +1466,8 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 设置应用 ---------------- */
+  /* 设置的落地与绑定：applySettings 把存档里的设置刷到按钮文字与音效层；
+     bindSettings 绑设置页各开关，含存档导出/导入与焚稿重置。 */
   function applySettings() {
     AU.setSfx(SAVE.settings.sfx);
     AU.setMusic(SAVE.settings.music);
@@ -1465,6 +1523,7 @@ window.SJI_UI = (function () {
   }
 
   /* ---------------- 启动 ---------------- */
+  /* boot 是本文件的入口：绑好各页返回按钮与战斗输入后进主菜单。 */
   function boot() {
     SAVE.migrateUnlocks();
     const back = (id, fn) => { $(id).onclick = () => { AU.click(); fn(); }; };
@@ -1486,6 +1545,8 @@ window.SJI_UI = (function () {
     $("#set-music").addEventListener("click", () => { if (SAVE.settings.music) AU.startMusic(); else AU.stopMusic(); });
   }
 
+  /* 对外接口：把内部函数打包挂成 window.SJI_UI，引擎正是靠 SJI_UI.playerPhase /
+     rpsRound / fxHit 这些名字反过来驱动本模块；生效版 battle-ui.js 同名保留了这套接口。 */
   return {
     boot, toast, showScreen, onLog, onState: updateAll,
     rpsRound, playerPhase, pickBoon, onBattleEnd,
